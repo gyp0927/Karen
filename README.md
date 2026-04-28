@@ -22,6 +22,7 @@
 | ⚡ 流式输出 | Token 级实时响应 |
 | 📊 用量统计 | Token 用量统计与费用估算 |
 | 🌙 主题切换 | 亮色 / 暗色 / 跟随系统 |
+| 🧠 自适应记忆 | 基于语义的热/冷分层记忆系统，跨会话长期记忆 |
 | 🔌 插件系统 | 可扩展插件机制 |
 | 🔗 MCP 支持 | Model Context Protocol 服务器接入 |
 
@@ -58,6 +59,17 @@ PROVIDER=deepseek
 MODEL=deepseek-chat
 API_KEY=your-api-key-here
 BASE_URL=https://api.deepseek.com/v1
+```
+
+#### 记忆系统配置（可选）
+
+系统默认启用本地自适应记忆，使用 sentence-transformers 进行本地 Embedding（无需额外 API Key）：
+
+```env
+EMBEDDING_PROVIDER=sentence-transformers
+LOCAL_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DIMENSION=384
+METADATA_DB_URL=sqlite+aiosqlite:///./data/adaptive_memory.db
 ```
 
 支持提供商：OpenAI、Anthropic、Google Gemini、DeepSeek、阿里通义千问、月之暗面 Kimi、智谱 GLM、xAI Grok、Mistral、Groq、Azure OpenAI、Ollama（本地）等。
@@ -107,9 +119,10 @@ python main.py
 Agent 编排 (LangGraph)    核心功能
 ├─ Coordinator 调度器      ├─ 配置管理
 ├─ Researcher  研究员      ├─ RAG 知识库
-├─ Responder   响应器      ├─ 联网搜索
-├─ Reviewer    审查者      ├─ 代码执行
-└─ Planner     规划器      └─ 聊天记录导出
+├─ Responder   响应器      ├─ 自适应记忆
+├─ Reviewer    审查者      ├─ 联网搜索
+└─ Planner     规划器      ├─ 代码执行
+                            └─ 聊天记录导出
        │
        ▼
    LLM 提供商 (20+ 家)
@@ -151,6 +164,7 @@ jelly-ai/
 │   └── factory.py
 ├── core/                    # 核心功能模块
 │   ├── config.py           # 配置管理
+│   ├── memory_client.py    # 自适应记忆系统客户端
 │   ├── rag.py              # RAG 知识库
 │   ├── export.py           # 聊天记录导出
 │   ├── cache.py            # 响应缓存
@@ -197,6 +211,20 @@ jelly-ai/
 2. 上传 PDF、Word 或文本文件
 3. 聊天时勾选"知识库"开关即可使用 RAG 检索
 
+### 自适应记忆
+
+系统内置热/冷分层记忆，自动完成以下流程：
+
+- **记忆检索**：发送消息时自动检索相关历史记忆，注入 LLM 上下文
+- **记忆保存**：对话结束后自动保存关键信息到长期记忆
+- **语义搜索**：基于向量相似度检索，无关关键词也能找到相关记忆
+- **跨会话**：切换会话后仍可检索之前对话中的重要信息
+
+记忆数据存储在本地：
+- `data/adaptive_memory.db` — 记忆元数据（SQLite）
+- `data/qdrant_storage/` — 向量数据库
+- `data/memories/` — 原始记忆文本
+
 ### 联网搜索
 
 输入框上方点击"联网"按钮开启 DuckDuckGo 实时搜索。
@@ -226,6 +254,8 @@ exit       退出程序
 | LangGraph | 多 Agent 工作流编排 |
 | LangChain | LLM 调用封装 |
 | SQLite | 数据持久化 |
+| Qdrant | 向量数据库（本地模式） |
+| sentence-transformers | 本地 Embedding 模型 |
 | WebView2 | 桌面客户端渲染 |
 
 ---
