@@ -720,8 +720,24 @@ function renderSessionList() {
 
 // ============ Socket Events ============
 
+// 页面离开前保存当前会话 ID，用于返回时恢复
+window.addEventListener("beforeunload", () => {
+  if (currentSessionId) {
+    sessionStorage.setItem("last_session_id", currentSessionId);
+  }
+});
+
 socket.on("connect", () => {
   console.log("Connected");
+  const lastSid = sessionStorage.getItem("last_session_id");
+  if (lastSid) {
+    // 从配置页等返回：恢复之前的会话
+    sessionStorage.removeItem("last_session_id");
+    socket.emit("switch_session", { session_id: lastSid });
+  } else {
+    // 首次进入程序：创建新会话
+    socket.emit("new_session");
+  }
   socket.emit("get_sessions");
   socket.emit("get_mode");
   // 如果有本地用户配置，发送给后端

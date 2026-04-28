@@ -37,6 +37,7 @@ from core.auth import (
     list_users, delete_user, update_user_config, auth_required
 )
 from state.stats import record_call, estimate_cost, get_stats_summary, get_daily_stats, CallRecord
+from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
 
 # 配置日志
 logging.basicConfig(
@@ -359,7 +360,7 @@ def start_socket_cleanup():
 
 
 def init_agents():
-    """预编译所有图结构。"""
+    """预编译所有图结构，并初始化记忆系统。"""
     global coordination_graph, fast_graph
 
     # 始终编译两种图，运行时根据 socket 的 fast_mode 选择
@@ -368,6 +369,31 @@ def init_agents():
     fast_graph = create_fast_graph(responder)
 
     logger.info("Agent graphs initialized")
+
+    # 初始化记忆系统（如果可用）
+    if _MEMORY_SYSTEM_AVAILABLE:
+        try:
+            run_async_in_thread(get_memory_store().initialize())
+            logger.info("Memory system initialized")
+        except Exception as e:
+            logger.warning(f"Memory system initialization failed: {e}")
+    else:
+        logger.info("Memory system not available (dependencies missing)")
+
+
+# 常见的 API Key 占位符/默认值，视为无效配置
+_INVALID_API_KEY_PATTERNS = {
+    "", "your_api_key_here", "your-api-key", "your_api_key",
+    "sk-xxxx", "sk-xxxxxxxx", "placeholder", "none", "null",
+}
+
+
+def _is_valid_api_key(key: str | None) -> bool:
+    """检查 API Key 是否有效（非空、非占位符）"""
+    if not key or not isinstance(key, str):
+        return False
+    stripped = key.strip().lower()
+    return stripped not in _INVALID_API_KEY_PATTERNS and len(stripped) > 4
 
 
 def has_socket_config(sid: str) -> bool:
@@ -379,7 +405,7 @@ def has_socket_config(sid: str) -> bool:
     provider = cfg.get("provider", "ollama")
     if provider == "ollama":
         return True
-    return bool(cfg.get("apiKey"))
+    return _is_valid_api_key(cfg.get("apiKey"))
 
 
 def has_valid_config(sid: str = None) -> bool:
@@ -391,15 +417,16 @@ def has_valid_config(sid: str = None) -> bool:
         provider = cfg.get("provider", "ollama")
         if provider == "ollama":
             return True
-        return bool(cfg.get("apiKey"))
+        return _is_valid_api_key(cfg.get("apiKey"))
     # 兼容旧版 .env
     try:
-        from core.config import get_api_key
-        get_api_key()
-        return True
+        from core.config import get_api_key, get_provider
+        key = get_api_key()
+        if _is_valid_api_key(key):
+            return True
     except (ValueError, KeyError) as e:
         logger.debug(f"No valid config found: {e}")
-        return False
+    return False
 
 
 def run_async_in_thread(coro):
@@ -1279,6 +1306,10 @@ def handle_message(data):
 
     set_current_llm_config(user_cfg, sid)
 
+    # 立即在前端显示用户消息并保存到数据库（不等待异步处理）
+    emit("user_message", {"message": user_message})
+    state.msg_manager.add_human_message(user_message)
+
     try:
         if state.planning_mode:
             run_async_in_thread(_async_handle_planning(
@@ -1373,7 +1404,6 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     search_context = ""
     if web_search:
         try:
-            emit("thinking", {"message": "正在联网搜索..."})
             from tools.search import search_and_summarize
             search_result = search_and_summarize(user_message, max_results=3)
             if search_result and "未找到" not in search_result:
@@ -1406,8 +1436,25 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         combined_content = f"{combined}\n\n用户问题：{user_message}"
         current_msg = HumanMessage(content=combined_content, name="Human")
 
+    # === 自适应记忆系统检索 ===
+    memory_context = ""
+    if _MEMORY_SYSTEM_AVAILABLE:
+        try:
+            store = get_memory_store()
+            memories = await store.retrieve(user_message, top_k=5, user_id=state.user_id)
+            if memories:
+                memory_context = store.format_memories_for_prompt(memories)
+                logger.info(f"Retrieved {len(memories)} memories for sid={sid}")
+        except Exception as e:
+            logger.warning(f"Memory retrieval failed: {e}")
+
     # 传给 LLM 的消息列表（历史 + 当前）
+    # 如果有相关记忆，以 SystemMessage 形式注入到消息列表开头
     messages_for_llm = messages + [current_msg]
+    if memory_context:
+        from langchain_core.messages import SystemMessage
+        memory_msg = SystemMessage(content=memory_context)
+        messages_for_llm = [memory_msg] + messages_for_llm
 
     initial_state = {
         "messages": messages_for_llm,
@@ -1418,12 +1465,6 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         "review_result": None,
         "awaiting_review": True
     }
-
-    # 先在前端显示用户消息（让顺序正确：用户消息在上，AI回复在下）
-    emit("user_message", {"message": user_message})
-
-    # 立即保存用户消息到数据库，避免页面跳转后丢失
-    state.msg_manager.add_human_message(user_message)
 
     # 根据 socket 的 fast_mode 选择图
     graph = fast_graph if state.fast_mode else coordination_graph
@@ -1442,7 +1483,9 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         if streaming_buffer["batch"]:
             batch_text = "".join(streaming_buffer["batch"])
             streaming_buffer["batch"].clear()
-            emit("token_chunk", {"token": batch_text})
+            # Use socketio.emit with room=sid to avoid request context issues
+            # when called from threading.Timer callback
+            socketio.emit("token_chunk", {"token": batch_text}, room=sid)
         streaming_buffer["timer"] = None
 
     def on_token_chunk(token: str):
@@ -1550,6 +1593,31 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     state.current_base_response = base_response
 
     state.msg_manager.add_agent_message(base_response, "base_model")
+
+    # === 保存对话记忆到自适应记忆系统 ===
+    if _MEMORY_SYSTEM_AVAILABLE:
+        try:
+            store = get_memory_store()
+            source = state.user_id or sid
+            # 保存用户输入作为 observation
+            await store.save_memory(
+                content=f"用户说: {user_message}",
+                memory_type="observation",
+                source=source,
+                importance=0.4,
+                tags=["user_input", f"session_{expected_session_id}"],
+            )
+            # 保存 AI 回复作为 observation
+            await store.save_memory(
+                content=f"AI回复: {base_response[:500]}",  # 限制长度避免过大
+                memory_type="observation",
+                source=source,
+                importance=0.3,
+                tags=["ai_response", f"session_{expected_session_id}"],
+            )
+            logger.debug(f"Conversation memories saved for sid={sid}")
+        except Exception as e:
+            logger.warning(f"Failed to save conversation memory: {e}")
 
     # 发送流式结束标记（如果使用了流式输出）
     if streaming_buffer["started"]:
