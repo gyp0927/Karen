@@ -120,11 +120,22 @@ def create_coordination_graph(coordinator_agent, researcher_agent, responder_age
     return workflow.compile()
 
 
-def create_fast_graph(responder_agent):
-    """快速模式：直接 responder，跳过 coordinator/researcher"""
+def create_fast_graph(coordinator_agent, researcher_agent, responder_agent):
+    """快速/计划模式：Coordinator → Researcher(2搜索) → Responder
+
+    Researcher 下并行 2 个搜索子 Agent（联网 + 记忆）。
+    """
     workflow = StateGraph(AgentState)
+    workflow.add_node("coordinator", coordinator_agent)
+    workflow.add_node("researcher", researcher_agent)
     workflow.add_node("responder", responder_agent)
-    workflow.set_entry_point("responder")
+    workflow.set_entry_point("coordinator")
+    workflow.add_conditional_edges(
+        "coordinator",
+        route_from_coordinator,
+        {"researcher": "researcher", "responder": "responder"}
+    )
+    workflow.add_edge("researcher", "responder")
     workflow.add_edge("responder", END)
     return workflow.compile()
 

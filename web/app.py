@@ -442,7 +442,7 @@ def init_agents():
     # 始终编译两种图，运行时根据 socket 的 fast_mode 选择
     coordinator, researcher, responder, reviewer = create_agents(language="zh", fast_mode=False)
     coordination_graph = create_coordination_graph(coordinator, researcher, responder)
-    fast_graph = create_fast_graph(responder)
+    fast_graph = create_fast_graph(coordinator, researcher, responder)
 
     logger.info("Agent graphs initialized")
 
@@ -1364,8 +1364,6 @@ def handle_message(data):
 
     user_message = data.get("message", "")
     document_context = data.get("document_context", "")
-    # 联网搜索默认启用（前端已删除开关，所有模式默认使用联网）
-    web_search = data.get("web_search", True)
     if not user_message:
         emit("error", {"message": "Empty message"})
         return
@@ -1427,7 +1425,7 @@ def handle_message(data):
             ))
         else:
             run_async_in_thread(_async_handle_message(
-                sid, user_message, document_context, expected_session_id, web_search
+                sid, user_message, document_context, expected_session_id
             ))
     except Exception as e:
         logger.exception(f"Error handling message from sid={sid}")
@@ -1497,11 +1495,15 @@ def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None
         logger.warning(f"Failed to record API stats: {e}")
 
 
-async def _async_handle_message(sid: str, user_message: str, document_context: str, expected_session_id: str, web_search: bool = False):
+async def _async_handle_message(sid: str, user_message: str, document_context: str, expected_session_id: str):
     """异步处理用户消息的核心逻辑（集成 RAG + 统计）
 
     消息持久化和前端显示仅在图执行成功后进行。如果执行失败，
     消息不会存入数据库，也不会出现在聊天界面中。
+
+    搜索流程（由 Researcher 节点内部并行执行）：
+    - 快速/计划模式：并行 2 个搜索子 Agent（联网 + 记忆）
+    - 协调模式：并行 3 个搜索子 Agent（联网 + 记忆 + 知识库）
     """
     from langchain_core.messages import HumanMessage
     state = get_socket_state(sid)
@@ -1513,61 +1515,13 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 构建当前用户消息（用于传给 LLM，但先不保存到数据库）
     current_msg = HumanMessage(content=user_message, name="Human")
 
-    # === 联网搜索 ===
-    search_context = ""
-    if web_search:
-        try:
-            from tools.search import search_and_summarize
-            search_result = search_and_summarize(user_message, max_results=3)
-            if search_result and "未找到" not in search_result:
-                search_context = search_result
-        except ImportError:
-            logger.warning("Search module not available")
-        except (TimeoutError, ConnectionError) as e:
-            logger.warning(f"Search timed out or connection failed: {e}")
-
-    # === RAG 知识库检索 ===
-    # 仅在协调模式下自动调用知识库；快速模式/计划模式下跳过，减少延迟
-    rag_context = ""
-    if not state.fast_mode and not state.planning_mode:
-        try:
-            rag_result = search_knowledge(user_message, top_k=3)
-            if rag_result and "知识库为空" not in rag_result and "未启用" not in rag_result:
-                rag_context = rag_result
-        except ImportError:
-            logger.warning("RAG module not available")
-        except (TimeoutError, ConnectionError) as e:
-            logger.warning(f"RAG query timed out or connection failed: {e}")
-
-    if document_context or search_context or rag_context:
-        extra_parts = []
-        if search_context:
-            extra_parts.append(search_context)
-        if document_context:
-            extra_parts.append(document_context)
-        if rag_context:
-            extra_parts.append(rag_context)
-        combined = "\n\n".join(extra_parts)
-        combined_content = f"{combined}\n\n用户问题：{user_message}"
-        current_msg = HumanMessage(content=combined_content, name="Human")
-
-    # === 自适应记忆系统检索 ===
-    memory_context = ""
-    if _MEMORY_SYSTEM_AVAILABLE:
-        try:
-            store = get_memory_store()
-            # 记忆检索加 2 秒超时：防止记忆系统卡死主响应流程
-            memories = await asyncio.wait_for(
-                store.retrieve(user_message, top_k=5, user_id=state.user_id),
-                timeout=2.0,
-            )
-            if memories:
-                memory_context = store.format_memories_for_prompt(memories)
-                logger.info(f"Retrieved {len(memories)} memories for sid={sid}")
-        except asyncio.TimeoutError:
-            logger.warning(f"Memory retrieval timeout for sid={sid}, skipping")
-        except Exception as e:
-            logger.warning(f"Memory retrieval failed: {e}")
+    # === 上传文件内容 ===
+    # 用户主动上传的文档内容直接注入上下文（不走搜索子 Agent）
+    if document_context:
+        current_msg = HumanMessage(
+            content=f"{document_context}\n\n用户问题：{user_message}",
+            name="Human",
+        )
 
     # === 自动语言检测（仅第一条用户消息） ===
     # 如果当前会话还没有检测过语言，且这是第一条用户消息，进行检测
@@ -1578,17 +1532,20 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         logger.info(f"Auto-detected language for sid={sid}: {state.detected_language} ({lang_name})")
 
     # 传给 LLM 的消息列表（历史 + 当前）
-    # 如果有相关记忆，以 SystemMessage 形式注入到消息列表开头
     messages_for_llm = messages + [current_msg]
-    if memory_context:
-        from langchain_core.messages import SystemMessage
-        memory_msg = SystemMessage(content=memory_context)
-        messages_for_llm = [memory_msg] + messages_for_llm
+
+    # 确定当前模式，供 Researcher 节点内的搜索子 Agent 使用
+    current_mode = "planning" if state.planning_mode else ("fast" if state.fast_mode else "coordination")
 
     initial_state = {
         "messages": messages_for_llm,
         "active_agent": None,
-        "task_context": {"user_input": user_message, "detected_language": state.detected_language},
+        "task_context": {
+            "user_input": user_message,
+            "detected_language": state.detected_language,
+            "user_id": state.user_id,
+            "mode": current_mode,
+        },
         "human_input_required": False,
         "base_model_response": None,
         "review_result": None,
@@ -1605,11 +1562,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         except Exception as e:
             logger.debug(f"Failed to emit {event} to {sid}: {e}")
 
-    if state.fast_mode:
-        _safe_emit("thinking", {"message": "正在生成回答..."})
-        _safe_emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
-    else:
-        _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
+    _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
 
     # 设置流式输出回调 - 低延迟 batch 策略：每 2 个 token flush，
     # 或遇到换行/句末标点立即 flush，同时设置 60ms 超时避免单个 token 延迟
@@ -1661,38 +1614,22 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     call_start = time.time()
 
     # === 执行图（核心逻辑，用 try/except 包裹）===
+    # 所有模式统一走 LangGraph：Coordinator → Researcher(并行搜索) → Responder
     try:
-        if state.fast_mode:
-            # 快速模式：直接调用 LLM，绕过 LangGraph 状态管理开销
-            llm = get_llm(sid)
-            from langchain_core.messages import AIMessage, SystemMessage
-            lang_instr = _lang_instruction(state.detected_language or "zh")
-            responder_prompt = f"""你是 ResponderBot（果冻ai），一位乐于助人且友善的助手。\n\n你的职责是：\n1. 提供清晰、友好的回复\n2. 以易于理解的方式呈现信息\n3. 保持对话式、亲切的风格\n{lang_instr}\n\n重要：每次回答时，你必须以"我是果冻ai"开头，然后再根据上下文生成最终回答。"""
-            all_messages = [SystemMessage(content=responder_prompt)] + messages_for_llm
-            response = ""
-            async for chunk in llm.astream(all_messages):
-                if is_stopped(sid):
-                    break
-                if chunk.content:
-                    response += chunk.content
-                    on_token_chunk(chunk.content)
-            flush_tokens()
-            final_state = {"messages": [AIMessage(content=response, name="responder")]}
-        else:
-            async for event in graph.astream(initial_state):
-                if is_stopped(sid):
-                    break
-                for node_name, node_output in event.items():
-                    if node_name == "coordinator":
-                        _safe_emit("agent_start", {"agent": "coordinator", "message": "分析需求中..."})
-                    elif node_name == "researcher":
-                        _safe_emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
-                        _safe_emit("agent_start", {"agent": "researcher", "message": "调研中..."})
-                    elif node_name == "responder":
-                        if "researcher" in event:
-                            _safe_emit("agent_finish", {"agent": "researcher", "message": "调研完成"})
-                        _safe_emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
-                    final_state = node_output
+        async for event in graph.astream(initial_state):
+            if is_stopped(sid):
+                break
+            for node_name, node_output in event.items():
+                if node_name == "coordinator":
+                    _safe_emit("agent_start", {"agent": "coordinator", "message": "分析需求中..."})
+                elif node_name == "researcher":
+                    _safe_emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
+                    _safe_emit("agent_start", {"agent": "researcher", "message": "调研中..."})
+                elif node_name == "responder":
+                    if "researcher" in event:
+                        _safe_emit("agent_finish", {"agent": "researcher", "message": "调研完成"})
+                    _safe_emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
+                final_state = node_output
     except Exception as e:
         logger.exception(f"Error processing message for sid={sid}")
         clear_streaming_callback(sid)

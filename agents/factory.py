@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -229,9 +230,108 @@ async def coordinator_node(state: dict, sid: str | None = None) -> dict:
     return await _run_agent(state, COORDINATOR_PROMPT, "coordinator", sid)
 
 
+async def web_searcher_agent(query: str) -> str:
+    """联网搜索子 Agent - 执行 DuckDuckGo 搜索并总结结果。"""
+    try:
+        from tools.search import search_and_summarize
+        result = search_and_summarize(query, max_results=3)
+        if result and "未找到" not in result:
+            return f"[联网搜索结果]\n\n{result}"
+    except ImportError:
+        pass
+    except (TimeoutError, ConnectionError):
+        pass
+    except Exception as e:
+        logger.warning(f"Web search agent failed: {e}")
+    return ""
+
+
+async def memory_searcher_agent(query: str, user_id: str = "") -> str:
+    """记忆搜索子 Agent - 从自适应记忆系统检索相关记忆。"""
+    try:
+        from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
+        if _MEMORY_SYSTEM_AVAILABLE:
+            store = get_memory_store()
+            memories = await asyncio.wait_for(
+                store.retrieve(query, top_k=5, user_id=user_id),
+                timeout=2.0,
+            )
+            if memories:
+                formatted = store.format_memories_for_prompt(memories)
+                if formatted:
+                    return f"[记忆检索结果]\n\n{formatted}"
+    except asyncio.TimeoutError:
+        pass
+    except Exception as e:
+        logger.warning(f"Memory search agent failed: {e}")
+    return ""
+
+
+async def knowledge_searcher_agent(query: str) -> str:
+    """知识库搜索子 Agent - 从 RAG 向量库检索相关文档。"""
+    try:
+        from core.rag import search_knowledge
+        result = search_knowledge(query, top_k=3)
+        if result and "知识库为空" not in result and "未启用" not in result:
+            return f"[知识库检索结果]\n\n{result}"
+    except ImportError:
+        pass
+    except (TimeoutError, ConnectionError):
+        pass
+    except Exception as e:
+        logger.warning(f"Knowledge search agent failed: {e}")
+    return ""
+
+
+async def _run_parallel_search(state: dict) -> str:
+    """根据 state 中的 mode 并行运行搜索子 Agent，返回整合后的搜索上下文。"""
+    user_message = state["messages"][-1].content
+    mode = state.get("task_context", {}).get("mode", "coordination")
+    user_id = state.get("task_context", {}).get("user_id", "")
+
+    # 根据模式决定启用哪些搜索子 Agent
+    tasks = []
+    if mode in ("fast", "planning"):
+        # 快速/计划模式：联网 + 记忆
+        tasks.append(web_searcher_agent(user_message))
+        tasks.append(memory_searcher_agent(user_message, user_id))
+    else:
+        # 协调模式：联网 + 记忆 + 知识库
+        tasks.append(web_searcher_agent(user_message))
+        tasks.append(memory_searcher_agent(user_message, user_id))
+        tasks.append(knowledge_searcher_agent(user_message))
+
+    # 并行执行搜索
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 整合搜索结果
+    search_parts = []
+    for result in results:
+        if isinstance(result, str) and result:
+            search_parts.append(result)
+
+    return "\n\n".join(search_parts) if search_parts else ""
+
+
 async def researcher_node(state: dict, sid: str | None = None) -> dict:
-    """研究员Agent - 提供准确信息"""
-    research_prompt = """你是 ResearcherBot（果冻ai团队的研究专家）。
+    """研究员 Agent - 并行调用多个搜索子 Agent，整合结果后生成研究回复。"""
+    # 并行执行搜索子 Agent
+    search_context = await _run_parallel_search(state)
+
+    # 构建研究提示词，包含搜索结果
+    if search_context:
+        research_prompt = f"""你是 ResearcherBot（果冻ai团队的研究专家）。
+
+{search_context}
+
+基于上述搜索结果，你的职责是：
+1. 提供准确、相关的信息
+2. 深入分析话题
+3. 以清晰、结构化的方式呈现研究结果
+
+回答时请先以"我是果冻ai"开头，然后提供简洁但信息丰富的研究内容。"""
+    else:
+        research_prompt = """你是 ResearcherBot（果冻ai团队的研究专家）。
 
 你的职责是：
 1. 提供准确、相关的信息
@@ -239,6 +339,7 @@ async def researcher_node(state: dict, sid: str | None = None) -> dict:
 3. 以清晰、结构化的方式呈现研究结果
 
 回答时请先以"我是果冻ai"开头，然后提供简洁但信息丰富的研究内容。"""
+
     return await _run_agent(state, research_prompt, "researcher", sid)
 
 
@@ -332,16 +433,17 @@ def parse_plan_from_response(text: str) -> dict | None:
 def create_agents(language: str = "zh", fast_mode: bool = False):
     """创建所有Agent节点函数的便捷函数
 
-    fast_mode=True: 只创建 Responder 和 Reviewer，跳过 Coordinator/Researcher
+    所有模式都包含 Coordinator 和 Researcher，区别仅在于：
+    - 快速/计划模式：Researcher 下并行 2 个搜索子 Agent（联网 + 记忆）
+    - 协调模式：Researcher 下并行 3 个搜索子 Agent（联网 + 记忆 + 知识库）
     """
     async def _reviewer_node(state: dict, sid: str | None = None) -> dict:
         return await reviewer_node(state, language=language, sid=sid)
 
-    coordinator = None if fast_mode else coordinator_node
-    researcher = None if fast_mode else researcher_node
+    # 所有模式都返回完整的 Agent 集合
     return (
-        coordinator,
-        researcher,
+        coordinator_node,
+        researcher_node,
         responder_node,
         _reviewer_node,
     )
