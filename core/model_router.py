@@ -137,8 +137,8 @@ class ModelRouter:
                     if tier in data:
                         defaults[tier].update(data[tier])
                 return defaults
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError) as e:
+                logger.warning(f"Failed to load model tier config: {e}")
         return defaults
 
     def save_tiers(self):

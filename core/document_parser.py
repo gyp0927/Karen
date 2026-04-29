@@ -17,8 +17,8 @@ def parse_document(file_path: str) -> str:
         # 尝试按文本读取
         try:
             return _parse_text(file_path)
-        except:
-            return f"[无法解析文件类型: {ext}]"
+        except (OSError, UnicodeDecodeError, ValueError) as e:
+            return f"[无法解析文件类型: {ext} - {e}]"
 
 
 def _parse_pdf(file_path: str) -> str:

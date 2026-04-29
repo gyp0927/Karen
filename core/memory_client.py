@@ -10,22 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sys
 from typing import Any
-
-# ---------------------------------------------------------------------------
-# Ensure the memory system's src directory is on sys.path so that its
-# package ``hot_and_cold_memory`` can be imported directly.
-# ---------------------------------------------------------------------------
-_MEMORY_SYS_SRC = os.path.abspath(
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "Self-organizing Knowledge Base",
-        "src",
-    )
-)
-if _MEMORY_SYS_SRC not in sys.path:
-    sys.path.insert(0, _MEMORY_SYS_SRC)
 
 # The memory system expects DOCUMENT_STORE_PATH but the Settings class only
 # defines MEMORY_STORE_PATH. We set a fallback env var before importing so

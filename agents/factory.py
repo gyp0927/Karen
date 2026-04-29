@@ -145,9 +145,9 @@ async def _run_agent(
     cache = get_cache() if is_responder else None
     if cache and is_responder:
         try:
-            provider = get_provider()
-            model = get_model_name()
-            cached_response = cache.get(messages, provider, model)
+            _provider = get_provider()
+            _model = get_model_name()
+            cached_response = cache.get(messages, _provider, _model)
             if cached_response is not None:
                 logger.info(f"[{agent_name}] Cache hit, skipping generation")
                 stream_cb = on_token if on_token else get_streaming_callback(sid)
@@ -174,9 +174,9 @@ async def _run_agent(
     # 写入缓存（仅 responder）
     if cache and is_responder and response:
         try:
-            provider = get_provider()
-            model = get_model_name()
-            cache.set(messages, provider, model, response)
+            _provider = get_provider()
+            _model = get_model_name()
+            cache.set(messages, _provider, _model, response)
         except (OSError, ValueError) as e:
             logger.warning(f"Cache write failed: {e}")
 

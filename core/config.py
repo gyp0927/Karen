@@ -1,7 +1,8 @@
 import hashlib
 import json
 import os
-import time as _time
+import time
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -41,7 +42,7 @@ def _try_load_from_model_configs():
 
     if not os.path.exists(_CONFIG_FILE):
         _config_cache = None
-        _config_cache_mtime = mtime if mtime else _time.time()
+        _config_cache_mtime = mtime if mtime else time.time()
         _config_cache_hash = ""
         return None
 
@@ -49,7 +50,7 @@ def _try_load_from_model_configs():
 
     # 如果 mtime 变了但内容哈希没变（某些编辑器会 touch 文件），保留缓存
     if _config_cache is not None and content_hash == _config_cache_hash:
-        _config_cache_mtime = mtime if mtime else _time.time()
+        _config_cache_mtime = mtime if mtime else time.time()
         return _config_cache
 
     try:
@@ -57,7 +58,7 @@ def _try_load_from_model_configs():
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         _config_cache = None
-        _config_cache_mtime = mtime if mtime else _time.time()
+        _config_cache_mtime = mtime if mtime else time.time()
         _config_cache_hash = content_hash
         return None
 
@@ -73,7 +74,7 @@ def _try_load_from_model_configs():
         result = configs[0]
 
     _config_cache = result
-    _config_cache_mtime = mtime if mtime else _time.time()
+    _config_cache_mtime = mtime if mtime else time.time()
     _config_cache_hash = content_hash
     return result
 
@@ -185,22 +186,32 @@ def get_provider() -> str:
     return os.getenv("LLM_PROVIDER", "ollama").lower()
 
 
-def get_api_key(provider: str = None) -> str:
+def _get_config_value(
+    cfg: dict | None,
+    key: str,
+    env_var: str,
+    provider_fallback: str = "",
+) -> str:
+    """通用配置获取逻辑：优先从配置字典读取，再回退到环境变量。"""
+    if cfg:
+        value = cfg.get(key, "")
+        if value:
+            return value
+    if env_var:
+        value = os.getenv(env_var, "")
+        if value:
+            return value
+    return provider_fallback
+
+
+def get_api_key(provider: str | None = None) -> str:
     """获取指定提供商的 API Key，各提供商完全隔离"""
     cfg = _try_load_from_model_configs()
-    if cfg:
-        p = (provider or cfg.get("provider", "ollama")).lower()
-        if p == "ollama":
-            return "ollama"
-        key = cfg.get("apiKey", "")
-        if key:
-            return key
-        raise ValueError(f"API Key not set for provider '{p}'")
-
-    p = (provider or get_provider()).lower()
+    p = (provider or (cfg.get("provider", "") if cfg else get_provider())).lower()
     if p == "ollama":
         return "ollama"
-    key = os.getenv(f"LLM_API_KEY_{p.upper().replace('-', '_')}")
+
+    key = _get_config_value(cfg, "apiKey", f"LLM_API_KEY_{p.upper().replace('-', '_')}")
     if key:
         return key
     raise ValueError(f"API Key not set for provider '{p}'")
@@ -208,40 +219,26 @@ def get_api_key(provider: str = None) -> str:
 
 def get_base_url() -> str:
     cfg = _try_load_from_model_configs()
-    if cfg:
-        url = cfg.get("baseUrl", "")
-        if url:
-            return url
-        provider = cfg.get("provider", "ollama")
-        if provider in PROVIDER_CONFIG:
-            return PROVIDER_CONFIG[provider]["base_url"]
-        return ""
+    url = _get_config_value(cfg, "baseUrl", "LLM_BASE_URL")
+    if url:
+        return url
 
-    if os.getenv("LLM_BASE_URL"):
-        return os.getenv("LLM_BASE_URL")
-    provider = get_provider()
-    if provider not in PROVIDER_CONFIG:
-        raise ValueError(f"Unknown provider '{provider}'. Supported: {list(PROVIDER_CONFIG.keys())}")
-    return PROVIDER_CONFIG[provider]["base_url"]
+    provider = (cfg.get("provider", "") if cfg else get_provider()).lower()
+    if provider in PROVIDER_CONFIG:
+        return PROVIDER_CONFIG[provider]["base_url"]
+    raise ValueError(f"Unknown provider '{provider}'. Supported: {list(PROVIDER_CONFIG.keys())}")
 
 
 def get_model_name() -> str:
     cfg = _try_load_from_model_configs()
-    if cfg:
-        model = cfg.get("model", "")
-        if model:
-            return model
-        provider = cfg.get("provider", "ollama")
-        if provider in PROVIDER_CONFIG:
-            return PROVIDER_CONFIG[provider]["default_model"]
-        return ""
+    model = _get_config_value(cfg, "model", "LLM_MODEL_NAME")
+    if model:
+        return model
 
-    if os.getenv("LLM_MODEL_NAME"):
-        return os.getenv("LLM_MODEL_NAME")
-    provider = get_provider()
-    if provider not in PROVIDER_CONFIG:
-        raise ValueError(f"Unknown provider '{provider}'. Supported: {list(PROVIDER_CONFIG.keys())}")
-    return PROVIDER_CONFIG[provider]["default_model"]
+    provider = (cfg.get("provider", "") if cfg else get_provider()).lower()
+    if provider in PROVIDER_CONFIG:
+        return PROVIDER_CONFIG[provider]["default_model"]
+    raise ValueError(f"Unknown provider '{provider}'. Supported: {list(PROVIDER_CONFIG.keys())}")
 
 
 def list_providers() -> list[str]:

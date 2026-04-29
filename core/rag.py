@@ -4,11 +4,10 @@
 支持文档分块、嵌入、检索。
 """
 
-import hashlib
 import logging
 import os
 import threading
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +17,6 @@ from core.vector_store.factory import get_vector_store
 
 if HAS_NUMPY:
     import numpy as np
-
-
-_STORE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
 
 # 全局向量存储实例（懒加载）
@@ -46,7 +42,10 @@ def reset_store(backend: str = None, persist_path: str = None):
     logger.info(f"Vector store reset to backend={backend or 'default'}")
 
 
-def get_embedding(text: str, model: str = "text-embedding-3-small") -> Optional[Any]:
+_EMBEDDING_MAX_CHARS = 8000
+
+
+def get_embedding(text: str, model: str = "text-embedding-3-small") -> Any | None:
     """获取文本的 embedding 向量。
 
     使用 OpenAI 兼容的 embedding API。
@@ -62,15 +61,24 @@ def get_embedding(text: str, model: str = "text-embedding-3-small") -> Optional[
 
         base_url = get_base_url()
         api_key = get_api_key()
-        provider = get_provider()
 
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        # 安全截断：避免在多字节字符中间截断
+        truncated = text[:_EMBEDDING_MAX_CHARS]
+        # 如果截断后的字符串不是合法的 UTF-8 结尾（比如截断了多字节字符），回退到更短的位置
+        while truncated:
+            try:
+                truncated.encode("utf-8")
+                break
+            except UnicodeEncodeError:
+                truncated = truncated[:-1]
+
         body = {
             "model": model,
-            "input": text[:8000],  # 截断避免超出限制
+            "input": truncated,
         }
         resp = requests.post(
             f"{base_url}/embeddings",
@@ -85,8 +93,11 @@ def get_embedding(text: str, model: str = "text-embedding-3-small") -> Optional[
         else:
             logger.warning(f"Embedding API error: {resp.status_code} - {resp.text[:200]}")
             return None
-    except Exception as e:
-        logger.exception("Failed to get embedding")
+    except (requests.RequestException, ConnectionError, TimeoutError) as e:
+        logger.warning(f"Embedding request failed: {e}")
+        return None
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        logger.warning(f"Embedding response parsing failed: {e}")
         return None
 
 
@@ -178,7 +189,7 @@ def search_knowledge(query: str, top_k: int = 3) -> str:
     return "\n".join(lines)
 
 
-def get_knowledge_stats() -> dict:
+def get_knowledge_stats() -> dict[str, Any]:
     """获取知识库统计信息"""
     store = _get_store()
     from core.vector_store.factory import list_backends, _get_backend_from_config

@@ -1,5 +1,7 @@
 import os
 import sys
+from pathlib import Path
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import io
@@ -603,17 +605,18 @@ def _cleanup_generated_files(max_files=50):
 def download_file(filename):
     """下载生成的文件"""
     try:
-        # 仅使用 realpath 进行路径校验（黑名单可被绕过）
-        file_path = os.path.join(_GENERATED_DIR, filename)
-        real_path = os.path.realpath(file_path)
-        real_dir = os.path.realpath(_GENERATED_DIR)
-        if not real_path.startswith(real_dir + os.sep) and real_path != real_dir:
+        # 使用 pathlib 进行安全的路径校验
+        base_dir = Path(_GENERATED_DIR).resolve()
+        target = (base_dir / filename).resolve()
+
+        # 确保目标在 base_dir 内部（resolve() 会处理 .. 等路径穿越）
+        if base_dir not in target.parents and target != base_dir:
             return {"success": False, "message": "非法路径"}, 403
 
-        if not os.path.exists(real_path):
+        if not target.is_file():
             return {"success": False, "message": "文件不存在"}, 404
 
-        ext = os.path.splitext(filename)[1].lower()
+        ext = target.suffix.lower()
         mime_map = {
             ".html": "text/html", ".doc": "application/msword",
             ".txt": "text/plain", ".md": "text/markdown",
@@ -622,7 +625,7 @@ def download_file(filename):
         }
         mimetype = mime_map.get(ext, "application/octet-stream")
 
-        return send_file(real_path, mimetype=mimetype, as_attachment=True, download_name=filename)
+        return send_file(str(target), mimetype=mimetype, as_attachment=True, download_name=filename)
     except (OSError, PermissionError) as e:
         logger.warning(f"Download failed for {filename}: {e}")
         return {"success": False, "message": f"下载失败: {str(e)}"}, 500
@@ -883,9 +886,33 @@ def disable_plugin_api(name):
         return {"success": False, "message": str(e)}, 500
 
 
+# 插件上传安全限制
+_MAX_PLUGIN_SIZE = 256 * 1024  # 256KB
+_PLUGIN_FORBIDDEN_IMPORTS = {"os.system", "subprocess", "eval", "exec", "compile", "__import__"}
+
+
+def _is_safe_plugin_filename(filename: str) -> bool:
+    """检查插件文件名是否安全（只允许简单的 .py 文件名）。"""
+    if not filename or not filename.endswith(".py"):
+        return False
+    name = filename[:-3]
+    # 只允许字母、数字、下划线、连字符
+    return name.isidentifier() or all(c.isalnum() or c in "_-" for c in name)
+
+
+def _scan_plugin_content(content: str) -> list[str]:
+    """扫描插件内容中的可疑代码。"""
+    issues = []
+    content_lower = content.lower()
+    for forbidden in _PLUGIN_FORBIDDEN_IMPORTS:
+        if forbidden in content_lower:
+            issues.append(f"发现危险操作: {forbidden}")
+    return issues
+
+
 @app.route("/api/plugins/upload", methods=["POST"])
 def upload_plugin_api():
-    """上传安装新插件"""
+    """上传安装新插件（带安全校验）"""
     try:
         if "file" not in request.files:
             return {"success": False, "message": "没有文件"}, 400
@@ -894,15 +921,23 @@ def upload_plugin_api():
         if file.filename == "":
             return {"success": False, "message": "文件名为空"}, 400
 
-        if not file.filename.endswith(".py"):
-            return {"success": False, "message": "只支持 .py 文件"}, 400
+        if not _is_safe_plugin_filename(file.filename):
+            return {"success": False, "message": "文件名不合法（只允许 .py 文件，文件名只能包含字母、数字、下划线、连字符）"}, 400
+
+        content = file.read().decode("utf-8", errors="replace")
+        if len(content) > _MAX_PLUGIN_SIZE:
+            return {"success": False, "message": f"插件文件过大（最大 {_MAX_PLUGIN_SIZE // 1024}KB）"}, 400
+
+        issues = _scan_plugin_content(content)
+        if issues:
+            return {"success": False, "message": f"安全扫描未通过: {'; '.join(issues)}"}, 400
 
         import core.plugin_system as ps
-        plugins_dir = ps._PLUGINS_DIR
-        os.makedirs(plugins_dir, exist_ok=True)
+        plugins_dir = Path(ps._PLUGINS_DIR)
+        plugins_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = os.path.join(plugins_dir, file.filename)
-        file.save(file_path)
+        file_path = plugins_dir / file.filename
+        file_path.write_text(content, encoding="utf-8")
 
         # 重新扫描插件
         registry = get_registry()
@@ -1301,8 +1336,8 @@ def handle_message(data):
                     "tier": route_result["tier"],
                     "score": route_result["analysis"]["score"],
                 })
-    except Exception:
-        logger.exception("Model routing failed, using default config")
+    except (OSError, ValueError) as e:
+        logger.warning(f"Model routing failed, using default config: {e}")
 
     set_current_llm_config(user_cfg, sid)
 
@@ -1716,11 +1751,8 @@ async def _async_handle_review(sid: str, expected_session_id: str):
     state.current_base_response = None
 
 
-@socketio.on("clear_history")
-def handle_clear():
-    """新建对话"""
-    sid = request.sid
-    state = get_socket_state(sid)
+def _create_new_session(sid: str, state):
+    """新建会话的通用逻辑"""
     set_stop(sid)
     state.current_base_response = None
     session_id = state.msg_manager.new_session("新对话")
@@ -1728,20 +1760,20 @@ def handle_clear():
         "session_id": session_id,
         "sessions": state.msg_manager.list_sessions()
     })
+
+
+@socketio.on("clear_history")
+def handle_clear():
+    """新建对话"""
+    sid = request.sid
+    _create_new_session(sid, get_socket_state(sid))
 
 
 @socketio.on("new_session")
 def handle_new_session():
     """新建会话"""
     sid = request.sid
-    state = get_socket_state(sid)
-    set_stop(sid)
-    state.current_base_response = None
-    session_id = state.msg_manager.new_session("新对话")
-    emit("session_created", {
-        "session_id": session_id,
-        "sessions": state.msg_manager.list_sessions()
-    })
+    _create_new_session(sid, get_socket_state(sid))
 
 
 @socketio.on("switch_session")
