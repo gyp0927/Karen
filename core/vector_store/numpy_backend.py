@@ -78,6 +78,13 @@ class NumpyBackend:
 
     def add(self, vector: Any, text: str, metadata: dict = None, auto_save: bool = True):
         with self._lock:
+            # 维度一致性校验
+            if self.vectors and vector.shape != self.vectors[0].shape:
+                logger.warning(
+                    f"Vector dimension mismatch: expected {self.vectors[0].shape}, "
+                    f"got {vector.shape}. Skipping."
+                )
+                return
             self.vectors.append(vector)
             self.texts.append(text)
             self.metadatas.append(metadata or {})
@@ -89,6 +96,13 @@ class NumpyBackend:
         """余弦相似度检索"""
         with self._lock:
             if not self.vectors:
+                return []
+            # 维度一致性校验
+            if query_vector.shape != self.vectors[0].shape:
+                logger.warning(
+                    f"Query vector dimension mismatch: stored {self.vectors[0].shape}, "
+                    f"query {query_vector.shape}. Returning empty."
+                )
                 return []
             vectors = np.stack(self.vectors)
             query_norm = query_vector / (np.linalg.norm(query_vector) + 1e-10)

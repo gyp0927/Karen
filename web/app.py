@@ -1362,14 +1362,17 @@ def handle_message(data):
         clear_streaming_callback(sid)
 
 
-def _emit_agent_reset(fast_mode: bool):
+def _emit_agent_reset(fast_mode: bool, sid: str = ""):
     """发送 Agent 空闲状态到前端"""
-    if fast_mode:
-        emit("agent_finish", {"agent": "responder", "message": "空闲"})
-    else:
-        emit("agent_finish", {"agent": "coordinator", "message": "空闲"})
-        emit("agent_finish", {"agent": "researcher", "message": "空闲"})
-        emit("agent_finish", {"agent": "responder", "message": "空闲"})
+    try:
+        if fast_mode:
+            socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
+        else:
+            socketio.emit("agent_finish", {"agent": "coordinator", "message": "空闲"}, room=sid)
+            socketio.emit("agent_finish", {"agent": "researcher", "message": "空闲"}, room=sid)
+            socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
+    except Exception:
+        pass
 
 
 def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None,
@@ -1402,9 +1405,9 @@ def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None
         record_call(record)
         logger.debug(f"API call recorded: {provider}/{model}, {duration_ms}ms, {prompt_tokens + completion_tokens} tokens")
 
-        # 向前端发送 token 使用统计
+        # 向前端发送 token 使用统计（使用 socketio.emit 避免后台线程上下文丢失）
         try:
-            emit("token_usage", {
+            socketio.emit("token_usage", {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
@@ -1412,8 +1415,8 @@ def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None
                 "duration_ms": duration_ms,
                 "provider": provider,
                 "model": model,
-            })
-        except (ConnectionError, TimeoutError) as e:
+            }, room=sid)
+        except Exception as e:
             logger.debug(f"Failed to emit token_usage: {e}")
     except (ValueError, TypeError) as e:
         logger.warning(f"Failed to record API stats: {e}")
@@ -1504,11 +1507,18 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 根据 socket 的 fast_mode 选择图
     graph = fast_graph if state.fast_mode else coordination_graph
 
+    # 安全 emit：后台线程中请求上下文可能丢失，使用 socketio.emit 代替
+    def _safe_emit(event, data):
+        try:
+            socketio.emit(event, data, room=sid)
+        except Exception as e:
+            logger.debug(f"Failed to emit {event} to {sid}: {e}")
+
     if state.fast_mode:
-        emit("thinking", {"message": "正在生成回答..."})
-        emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
+        _safe_emit("thinking", {"message": "正在生成回答..."})
+        _safe_emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
     else:
-        emit("thinking", {"message": "Coordinator 正在分析需求..."})
+        _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
 
     # 设置流式输出回调 - 低延迟 batch 策略：每 2 个 token flush，
     # 或遇到换行/句末标点立即 flush，同时设置 60ms 超时避免单个 token 延迟
@@ -1526,7 +1536,8 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     def on_token_chunk(token: str):
         if not streaming_buffer["started"]:
             streaming_buffer["started"] = True
-            emit("stream_start", {"agent": "responder"})
+            # 使用 socketio.emit 避免后台线程中请求上下文丢失的问题
+            socketio.emit("stream_start", {"agent": "responder"}, room=sid)
         streaming_buffer["batch"].append(token)
         # 累积 2 个 token 或包含换行/句末标点时立即 flush
         should_flush = (
@@ -1551,7 +1562,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         if streaming_buffer["batch"]:
             batch_text = "".join(streaming_buffer["batch"])
             streaming_buffer["batch"].clear()
-            emit("token_chunk", {"token": batch_text})
+            socketio.emit("token_chunk", {"token": batch_text}, room=sid)
 
     set_streaming_callback(on_token_chunk, sid)
 
@@ -1581,21 +1592,21 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
                     break
                 for node_name, node_output in event.items():
                     if node_name == "coordinator":
-                        emit("agent_start", {"agent": "coordinator", "message": "分析需求中..."})
+                        _safe_emit("agent_start", {"agent": "coordinator", "message": "分析需求中..."})
                     elif node_name == "researcher":
-                        emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
-                        emit("agent_start", {"agent": "researcher", "message": "调研中..."})
+                        _safe_emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
+                        _safe_emit("agent_start", {"agent": "researcher", "message": "调研中..."})
                     elif node_name == "responder":
                         if "researcher" in event:
-                            emit("agent_finish", {"agent": "researcher", "message": "调研完成"})
-                        emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
+                            _safe_emit("agent_finish", {"agent": "researcher", "message": "调研完成"})
+                        _safe_emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
                     final_state = node_output
     except Exception as e:
         logger.exception(f"Error processing message for sid={sid}")
         clear_streaming_callback(sid)
-        _emit_agent_reset(state.fast_mode)
+        _emit_agent_reset(state.fast_mode, sid)
         clear_stop(sid)
-        emit("message_failed", {"message": user_message, "error": str(e)})
+        _safe_emit("message_failed", {"message": user_message, "error": str(e)})
         return
 
     # === 图执行成功后的处理 ===
@@ -1605,15 +1616,15 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     _record_api_stats(sid, messages_for_llm, final_state, expected_session_id, call_start)
 
     # 3. 重置 Agent 状态
-    _emit_agent_reset(state.fast_mode)
+    _emit_agent_reset(state.fast_mode, sid)
 
     if is_stopped(sid):
-        emit("generation_stopped", {"message": "生成已停止"})
+        _safe_emit("generation_stopped", {"message": "生成已停止"})
         return
 
     if final_state is None:
         clear_streaming_callback(sid)
-        emit("error", {"message": "No response generated"})
+        _safe_emit("error", {"message": "No response generated"})
         return
 
     # 清理流式回调
@@ -1656,10 +1667,10 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
 
     # 发送流式结束标记（如果使用了流式输出）
     if streaming_buffer["started"]:
-        emit("stream_end", {"message": base_response, "awaiting_review": True})
+        _safe_emit("stream_end", {"message": base_response, "awaiting_review": True})
     else:
         # 未使用流式输出（如 fast_mode），一次性发送完整消息
-        emit("base_response", {
+        _safe_emit("base_response", {
             "message": base_response,
             "awaiting_review": True
         })
@@ -1706,7 +1717,14 @@ async def _async_handle_review(sid: str, expected_session_id: str):
             break
 
     lang_name = "中文" if state.review_language == "zh" else "English"
-    emit("agent_start", {
+
+    def _safe_emit_review(event, data):
+        try:
+            socketio.emit(event, data, room=sid)
+        except Exception:
+            pass
+
+    _safe_emit_review("agent_start", {
         "agent": "reviewer",
         "message": "正在审查..." if state.review_language == "zh" else "Reviewing response..."
     })
@@ -1732,10 +1750,10 @@ async def _async_handle_review(sid: str, expected_session_id: str):
         if chunk.content:
             review_result += chunk.content
 
-    emit("agent_finish", {"agent": "reviewer", "message": "空闲"})
+    _safe_emit_review("agent_finish", {"agent": "reviewer", "message": "空闲"})
 
     if is_stopped(sid):
-        emit("generation_stopped", {"message": "生成已停止"})
+        _safe_emit_review("generation_stopped", {"message": "生成已停止"})
         return
 
     # 会话隔离检查
@@ -1743,7 +1761,7 @@ async def _async_handle_review(sid: str, expected_session_id: str):
         logger.info(f"Session changed during review, discarding result for sid={sid}")
         return
 
-    emit("review_complete", {
+    _safe_emit_review("review_complete", {
         "review_result": review_result or "No review available",
         "original_response": state.current_base_response
     })
@@ -2332,33 +2350,39 @@ async def _async_execute_plan_step(sid: str, step_index: int, expected_session_i
     graph = coordination_graph  # 计划模式始终使用协调图
     final_state = None
 
+    def _safe_emit_plan(event, data):
+        try:
+            socketio.emit(event, data, room=sid)
+        except Exception:
+            pass
+
     try:
         async for event in graph.astream(initial_state):
             if is_stopped(sid):
                 break
             for node_name, node_output in event.items():
                 if node_name == "coordinator":
-                    emit("agent_start", {"agent": "coordinator", "message": "分析步骤需求..."})
+                    _safe_emit_plan("agent_start", {"agent": "coordinator", "message": "分析步骤需求..."})
                 elif node_name == "researcher":
-                    emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
-                    emit("agent_start", {"agent": "researcher", "message": "调研中..."})
+                    _safe_emit_plan("agent_finish", {"agent": "coordinator", "message": "分析完成"})
+                    _safe_emit_plan("agent_start", {"agent": "researcher", "message": "调研中..."})
                 elif node_name == "responder":
                     if "researcher" in event:
-                        emit("agent_finish", {"agent": "researcher", "message": "调研完成"})
-                    emit("agent_start", {"agent": "responder", "message": "生成结果..."})
+                        _safe_emit_plan("agent_finish", {"agent": "researcher", "message": "调研完成"})
+                    _safe_emit_plan("agent_start", {"agent": "responder", "message": "生成结果..."})
                 final_state = node_output
     except Exception as e:
         logger.exception(f"Error executing plan step {step_index} for sid={sid}")
-        _emit_agent_reset(False)
+        _emit_agent_reset(False, sid)
         clear_stop(sid)
-        emit("plan_step_error", {
+        _safe_emit_plan("plan_step_error", {
             "step_index": step_index,
             "error": str(e),
             "message": f"步骤 {step_index + 1} 执行失败"
         })
         return
 
-    _emit_agent_reset(False)
+    _emit_agent_reset(False, sid)
 
     if is_stopped(sid):
         emit("generation_stopped", {"message": "生成已停止"})
