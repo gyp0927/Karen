@@ -1526,15 +1526,17 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
             logger.warning(f"Search timed out or connection failed: {e}")
 
     # === RAG 知识库检索 ===
+    # 仅在协调模式下自动调用知识库；快速模式/计划模式下跳过，减少延迟
     rag_context = ""
-    try:
-        rag_result = search_knowledge(user_message, top_k=3)
-        if rag_result and "知识库为空" not in rag_result and "未启用" not in rag_result:
-            rag_context = rag_result
-    except ImportError:
-        logger.warning("RAG module not available")
-    except (TimeoutError, ConnectionError) as e:
-        logger.warning(f"RAG query timed out or connection failed: {e}")
+    if not state.fast_mode and not state.planning_mode:
+        try:
+            rag_result = search_knowledge(user_message, top_k=3)
+            if rag_result and "知识库为空" not in rag_result and "未启用" not in rag_result:
+                rag_context = rag_result
+        except ImportError:
+            logger.warning("RAG module not available")
+        except (TimeoutError, ConnectionError) as e:
+            logger.warning(f"RAG query timed out or connection failed: {e}")
 
     if document_context or search_context or rag_context:
         extra_parts = []
