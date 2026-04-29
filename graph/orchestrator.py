@@ -114,42 +114,20 @@ def create_coordination_graph(coordinator_agent, researcher_agent, responder_age
     return workflow.compile()
 
 
-# 轻量级意图关键词：匹配到则跳过搜索，直接由 Responder 回复
-_SKIP_SEARCH_PATTERNS = [
-    # 问候
-    "你好", "您好", "嗨", "hello", "hi", "hey",
-    "早上好", "下午好", "晚上好", "早安", "晚安",
-    # 感谢
-    "谢谢", "感谢", "thx", "thanks", "thank you",
-    # 告别
-    "再见", "拜拜", "bye", "goodbye",
-    # 确认/否定
-    "是的", "没错", "对的", "好", "ok", "okay", "嗯", "哦",
-    "不是", "不对", "不行", "不可以",
-]
-
-
-def _should_skip_search(query: str) -> bool:
-    """轻量级意图检测：问候/闲聊/感谢等直接跳过搜索。"""
-    q = query.strip().lower()
-    # 短句（≤6字）且匹配关键词 → 跳过搜索
-    if len(query.strip()) <= 6:
-        for pat in _SKIP_SEARCH_PATTERNS:
-            if pat in q:
-                return True
-    return False
-
-
 def create_fast_graph(web_searcher, memory_searcher, responder_agent):
     """快速/计划模式：并行 WebSearcher + MemorySearcher → Responder
 
     无 Coordinator、无 Researcher LLM 调用，直接并行搜索后生成回答。
-    比协调模式少 1-2 次 LLM 调用，速度最快。
+    基于三层意图识别（规则+上下文+LLM）智能决定是否跳过搜索。
     """
 
     async def web_searcher_node(state: AgentState) -> dict:
-        """联网搜索节点"""
+        """联网搜索节点——根据意图结果决定是否执行"""
         query = state["messages"][-1].content
+        # 检查 task_context 中是否已有意图判断
+        intent = state.get("task_context", {}).get("intent_result")
+        if intent and intent.get("skip_search"):
+            return {"messages": []}
         result = await web_searcher(query)
         if result:
             from langchain_core.messages import SystemMessage
@@ -157,8 +135,11 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
         return {"messages": []}
 
     async def memory_searcher_node(state: AgentState) -> dict:
-        """记忆搜索节点"""
+        """记忆搜索节点——根据意图结果决定是否执行"""
         query = state["messages"][-1].content
+        intent = state.get("task_context", {}).get("intent_result")
+        if intent and intent.get("skip_memory"):
+            return {"messages": []}
         user_id = state.get("task_context", {}).get("user_id", "")
         result = await memory_searcher(query, user_id)
         if result:
@@ -167,24 +148,50 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
         return {"messages": []}
 
     def start_parallel_search(state: AgentState):
-        """并行启动两个搜索子 Agent。
+        """基于意图识别的智能路由。
 
-        对问候/闲聊等短句直接跳过搜索，进入 Responder，节省 2~5 秒。
+        1. 规则/上下文能确定跳过的 → 直接 Responder（0ms）
+        2. 规则能确定需要搜索的 → 并行搜索
+        3. 不确定的 → 并行搜索（LLM 分类器在节点内异步执行）
         """
+        from core.intent import classify_intent_sync
+
         query = state["messages"][-1].content
-        if _should_skip_search(query):
+        history = state.get("messages", [])
+
+        result = classify_intent_sync(query, history=history)
+
+        # 将意图结果写入 state（通过 Send 传递）
+        state.setdefault("task_context", {})
+        state["task_context"]["intent_result"] = {
+            "intent": result.intent,
+            "confidence": result.confidence,
+            "skip_search": result.skip_search,
+            "skip_memory": result.skip_memory,
+            "skip_knowledge": result.skip_knowledge,
+            "source": result.source,
+        }
+
+        if result.skip_search and result.skip_memory:
             return Send("responder", state)
-        return [
-            Send("web_searcher", state),
-            Send("memory_searcher", state),
-        ]
+
+        # 需要搜索：并行启动
+        sends = []
+        if not result.skip_search:
+            sends.append(Send("web_searcher", state))
+        if not result.skip_memory:
+            sends.append(Send("memory_searcher", state))
+
+        # 如果搜索全被跳过但上面没命中，保险起见还是走 Responder
+        if not sends:
+            return Send("responder", state)
+        return sends
 
     workflow = StateGraph(AgentState)
     workflow.add_node("web_searcher", web_searcher_node)
     workflow.add_node("memory_searcher", memory_searcher_node)
     workflow.add_node("responder", responder_agent)
 
-    # __start__ 是 LangGraph 隐式起点，从这里分发给搜索节点或 responder
     workflow.add_conditional_edges(
         "__start__",
         start_parallel_search,
