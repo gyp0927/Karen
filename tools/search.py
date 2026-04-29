@@ -19,17 +19,48 @@ def _fetch(url: str, timeout: int = 15) -> str:
         return resp.read().decode("utf-8", errors="ignore")
 
 
-def duckduckgo_search(query: str, max_results: int = 5) -> list[dict]:
+# 搜索结果缓存（query -> (timestamp, result)）
+_search_cache: dict[str, tuple[float, list[dict]]] = {}
+_SEARCH_CACHE_TTL = 300  # 5 分钟
+
+
+def _get_cached_search(query: str) -> list[dict] | None:
+    """获取缓存的搜索结果。"""
+    import time
+    if query in _search_cache:
+        ts, results = _search_cache[query]
+        if time.time() - ts < _SEARCH_CACHE_TTL:
+            logger.debug(f"Search cache hit: '{query}'")
+            return results
+    return None
+
+
+def _set_cached_search(query: str, results: list[dict]):
+    """缓存搜索结果。"""
+    import time
+    _search_cache[query] = (time.time(), results)
+
+
+def duckduckgo_search(query: str, max_results: int = 3) -> list[dict]:
     """使用 DuckDuckGo 搜索（无需 API Key）。
 
     返回结果列表，每项包含 title, href, snippet。
+    - 默认返回 3 条（减少网页抓取耗时）
+    - 启用 5 分钟缓存，避免重复搜索
+    - 搜索超时 8 秒，避免长时间阻塞
     """
     import re
+
+    # 检查缓存
+    cached = _get_cached_search(query)
+    if cached is not None:
+        return cached
+
     try:
         # DuckDuckGo HTML 搜索
         encoded = urllib.parse.quote(query)
         url = f"https://html.duckduckgo.com/html/?q={encoded}"
-        html = _fetch(url, timeout=20)
+        html = _fetch(url, timeout=8)
 
         results = []
         # 尝试多种选择器匹配结果块
@@ -58,16 +89,20 @@ def duckduckgo_search(query: str, max_results: int = 5) -> list[dict]:
                 break
 
         logger.info(f"DuckDuckGo search: '{query}' -> {len(results)} results")
+        _set_cached_search(query, results)
         return results
     except Exception as e:
-        logger.exception(f"Search failed for query: {query}")
+        logger.warning(f"Search failed for query: {query} - {e}")
         return []
 
 
-def fetch_page_content(url: str, max_chars: int = 3000) -> str:
-    """获取网页内容（简单文本提取）。"""
+def fetch_page_content(url: str, max_chars: int = 1200) -> str:
+    """获取网页内容（简单文本提取）。
+
+    超时缩短到 5 秒，避免单个网页阻塞整体搜索。
+    """
     try:
-        html = _fetch(url, timeout=15)
+        html = _fetch(url, timeout=5)
         # 移除 script/style 标签
         import re
         text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
@@ -80,11 +115,11 @@ def fetch_page_content(url: str, max_chars: int = 3000) -> str:
             text = text[:max_chars] + "\n\n[网页内容已截断]"
         return text
     except Exception as e:
-        logger.exception(f"Failed to fetch page: {url}")
-        return f"[无法获取网页内容: {str(e)}]"
+        logger.warning(f"Failed to fetch page: {url} - {e}")
+        return "[无法获取网页内容]"
 
 
-def search_and_summarize(query: str, max_results: int = 3, fetch_content: bool = True) -> str:
+def search_and_summarize(query: str, max_results: int = 2, fetch_content: bool = True) -> str:
     """搜索并返回格式化的结果文本（供 LLM 使用）。
 
     返回格式化的搜索结果文本，包含标题、链接和摘要。

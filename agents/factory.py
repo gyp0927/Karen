@@ -258,7 +258,7 @@ async def memory_searcher_agent(query: str, user_id: str = "") -> str:
             store = get_memory_store()
             memories = await asyncio.wait_for(
                 store.retrieve(query, top_k=5, user_id=user_id),
-                timeout=2.0,
+                timeout=1.0,
             )
             if memories:
                 formatted = store.format_memories_for_prompt(memories)
@@ -319,33 +319,23 @@ async def _run_parallel_search(state: dict) -> str:
 
 
 async def researcher_node(state: dict, sid: str | None = None) -> dict:
-    """研究员 Agent - 并行调用多个搜索子 Agent，整合结果后生成研究回复。"""
-    # 并行执行搜索子 Agent
+    """研究员 Agent - 仅并行搜索并整合结果，不做 LLM 生成。
+
+    搜索结果以 SystemMessage 形式注入消息流，由 Responder 直接生成最终回复。
+    避免 Researcher 和 Responder 重复生成，减少一次 LLM 调用。
+    """
     search_context = await _run_parallel_search(state)
 
-    # 构建研究提示词，包含搜索结果
     if search_context:
-        research_prompt = f"""你是 ResearcherBot（果冻ai团队的研究专家）。
+        # 将搜索结果作为系统消息注入，Responder 会在其上下文中生成最终回复
+        system_msg = SystemMessage(
+            content=f"【搜索结果】\n\n{search_context}\n\n请基于以上搜索结果生成最终回答。",
+            name="researcher",
+        )
+        return {"messages": [system_msg]}
 
-{search_context}
-
-基于上述搜索结果，你的职责是：
-1. 提供准确、相关的信息
-2. 深入分析话题
-3. 以清晰、结构化的方式呈现研究结果
-
-回答时请先以"我是果冻ai"开头，然后提供简洁但信息丰富的研究内容。"""
-    else:
-        research_prompt = """你是 ResearcherBot（果冻ai团队的研究专家）。
-
-你的职责是：
-1. 提供准确、相关的信息
-2. 深入分析话题
-3. 以清晰、结构化的方式呈现研究结果
-
-回答时请先以"我是果冻ai"开头，然后提供简洁但信息丰富的研究内容。"""
-
-    return await _run_agent(state, research_prompt, "researcher", sid)
+    # 无搜索结果时返回空，Responder 直接基于原始消息生成
+    return {"messages": []}
 
 
 async def responder_node(state: dict, sid: str | None = None) -> dict:

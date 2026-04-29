@@ -114,6 +114,32 @@ def create_coordination_graph(coordinator_agent, researcher_agent, responder_age
     return workflow.compile()
 
 
+# 轻量级意图关键词：匹配到则跳过搜索，直接由 Responder 回复
+_SKIP_SEARCH_PATTERNS = [
+    # 问候
+    "你好", "您好", "嗨", "hello", "hi", "hey",
+    "早上好", "下午好", "晚上好", "早安", "晚安",
+    # 感谢
+    "谢谢", "感谢", "thx", "thanks", "thank you",
+    # 告别
+    "再见", "拜拜", "bye", "goodbye",
+    # 确认/否定
+    "是的", "没错", "对的", "好", "ok", "okay", "嗯", "哦",
+    "不是", "不对", "不行", "不可以",
+]
+
+
+def _should_skip_search(query: str) -> bool:
+    """轻量级意图检测：问候/闲聊/感谢等直接跳过搜索。"""
+    q = query.strip().lower()
+    # 短句（≤6字）且匹配关键词 → 跳过搜索
+    if len(query.strip()) <= 6:
+        for pat in _SKIP_SEARCH_PATTERNS:
+            if pat in q:
+                return True
+    return False
+
+
 def create_fast_graph(web_searcher, memory_searcher, responder_agent):
     """快速/计划模式：并行 WebSearcher + MemorySearcher → Responder
 
@@ -141,7 +167,13 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
         return {"messages": []}
 
     def start_parallel_search(state: AgentState):
-        """并行启动两个搜索子 Agent"""
+        """并行启动两个搜索子 Agent。
+
+        对问候/闲聊等短句直接跳过搜索，进入 Responder，节省 2~5 秒。
+        """
+        query = state["messages"][-1].content
+        if _should_skip_search(query):
+            return Send("responder", state)
         return [
             Send("web_searcher", state),
             Send("memory_searcher", state),
@@ -152,11 +184,11 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
     workflow.add_node("memory_searcher", memory_searcher_node)
     workflow.add_node("responder", responder_agent)
 
-    # __start__ 是 LangGraph 隐式起点，从这里并行分发给两个搜索节点
+    # __start__ 是 LangGraph 隐式起点，从这里分发给搜索节点或 responder
     workflow.add_conditional_edges(
         "__start__",
         start_parallel_search,
-        ["web_searcher", "memory_searcher"]
+        {"web_searcher": "web_searcher", "memory_searcher": "memory_searcher", "responder": "responder"}
     )
     workflow.add_edge("web_searcher", "responder")
     workflow.add_edge("memory_searcher", "responder")
