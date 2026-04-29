@@ -15,17 +15,20 @@ from prompts.coordinator_prompt import COORDINATOR_PROMPT
 from prompts.reviewer_prompt import get_reviewer_prompt
 from state.stop_flag import is_stopped
 
-# 全局共享的异步 HTTP 客户端（连接池复用）
+# 全局共享的 HTTP 客户端（连接池复用）
 _httpx_client = None
 
 
 def _get_http_client():
-    """获取全局共享的 httpx.AsyncClient，启用连接池复用。"""
+    """获取全局共享的 httpx.Client，启用连接池复用。
+
+    LangChain ChatOpenAI 的 http_client 参数需要同步的 httpx.Client，
+    而非 AsyncClient。"""
     global _httpx_client
     if _httpx_client is None:
         try:
             import httpx
-            _httpx_client = httpx.AsyncClient(
+            _httpx_client = httpx.Client(
                 limits=httpx.Limits(
                     max_connections=100,
                     max_keepalive_connections=20,
