@@ -193,6 +193,11 @@ async def _run_agent(
         except (OSError, ValueError) as e:
             logger.warning(f"Cache lookup failed: {e}, falling back to generation")
 
+    # 限制 Coordinator 输出长度：只需要路由标记，最多 80 tokens
+    # 大幅减少 Coordinator 节点的耗时（从 1-2 秒降到 0.3-0.5 秒）
+    if agent_name == "coordinator":
+        llm = llm.bind(max_tokens=80)
+
     response = ""
     # 只有 responder 节点触发流式回调（最终输出）
     # coordinator 和 reviewer 是内部节点，不需要流式展示
