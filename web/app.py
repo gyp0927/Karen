@@ -22,6 +22,7 @@ from agents.factory import (
     create_agents, planner_node, parse_plan_from_response,
     set_current_llm_config, set_streaming_callback,
     clear_streaming_callback, clear_llm_cache, get_llm,
+    web_searcher_agent, memory_searcher_agent,
 )
 from graph.orchestrator import create_coordination_graph, create_fast_graph
 from state.manager import SessionManager
@@ -442,7 +443,8 @@ def init_agents():
     # 始终编译两种图，运行时根据 socket 的 fast_mode 选择
     coordinator, researcher, responder, reviewer = create_agents(language="zh", fast_mode=False)
     coordination_graph = create_coordination_graph(coordinator, researcher, responder)
-    fast_graph = create_fast_graph(coordinator, researcher, responder)
+    # 快速模式：并行 WebSearcher + MemorySearcher → Responder（无 Coordinator/Researcher）
+    fast_graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, responder)
 
     logger.info("Agent graphs initialized")
 
@@ -1439,8 +1441,9 @@ def _emit_agent_reset(fast_mode: bool, sid: str = ""):
     """发送 Agent 空闲状态到前端"""
     try:
         if fast_mode:
-            # 快速/计划模式：Researcher → Responder
-            socketio.emit("agent_finish", {"agent": "researcher", "message": "空闲"}, room=sid)
+            # 快速/计划模式：并行 WebSearcher + MemorySearcher → Responder
+            socketio.emit("agent_finish", {"agent": "web_searcher", "message": "空闲"}, room=sid)
+            socketio.emit("agent_finish", {"agent": "memory_searcher", "message": "空闲"}, room=sid)
             socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
         else:
             # 协调模式：Coordinator → Researcher → Responder
@@ -1635,13 +1638,20 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
                 if node_name == "coordinator":
                     _safe_emit("agent_start", {"agent": "coordinator", "message": "分析需求中..."})
                 elif node_name == "researcher":
-                    # 协调模式才有 coordinator，快速/计划模式跳过
+                    # 协调模式才有 coordinator
                     if "coordinator" in event:
                         _safe_emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
                     _safe_emit("agent_start", {"agent": "researcher", "message": "调研中..."})
+                elif node_name in ("web_searcher", "memory_searcher"):
+                    # 快速/计划模式的并行搜索子 Agent
+                    agent_label = "联网搜索" if node_name == "web_searcher" else "记忆检索"
+                    _safe_emit("agent_start", {"agent": node_name, "message": f"{agent_label}中..."})
                 elif node_name == "responder":
+                    # 完成前置节点
                     if "researcher" in event:
                         _safe_emit("agent_finish", {"agent": "researcher", "message": "调研完成"})
+                    if "web_searcher" in event or "memory_searcher" in event:
+                        _safe_emit("agent_finish", {"agent": "search_hub", "message": "搜索完成"})
                     _safe_emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
                 final_state = node_output
     except Exception as e:

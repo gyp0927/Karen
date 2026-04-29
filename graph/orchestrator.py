@@ -1,4 +1,5 @@
 from langgraph.graph import StateGraph, END
+from langgraph.types import Send
 
 from state.types import AgentState
 
@@ -113,17 +114,52 @@ def create_coordination_graph(coordinator_agent, researcher_agent, responder_age
     return workflow.compile()
 
 
-def create_fast_graph(coordinator_agent, researcher_agent, responder_agent):
-    """快速/计划模式：跳过 Coordinator，直接 Researcher(2搜索) → Responder
+def create_fast_graph(web_searcher, memory_searcher, responder_agent):
+    """快速/计划模式：并行 WebSearcher + MemorySearcher → Responder
 
-    比协调模式少一次 Coordinator LLM 调用，更快。
-    Researcher 下并行 2 个搜索子 Agent（联网 + 记忆）。
+    无 Coordinator、无 Researcher LLM 调用，直接并行搜索后生成回答。
+    比协调模式少 1-2 次 LLM 调用，速度最快。
     """
+
+    async def web_searcher_node(state: AgentState) -> dict:
+        """联网搜索节点"""
+        query = state["messages"][-1].content
+        result = await web_searcher(query)
+        if result:
+            from langchain_core.messages import SystemMessage
+            return {"messages": [SystemMessage(content=result)]}
+        return {"messages": []}
+
+    async def memory_searcher_node(state: AgentState) -> dict:
+        """记忆搜索节点"""
+        query = state["messages"][-1].content
+        user_id = state.get("task_context", {}).get("user_id", "")
+        result = await memory_searcher(query, user_id)
+        if result:
+            from langchain_core.messages import SystemMessage
+            return {"messages": [SystemMessage(content=result)]}
+        return {"messages": []}
+
+    def start_parallel_search(state: AgentState):
+        """并行启动两个搜索子 Agent"""
+        return [
+            Send("web_searcher", state),
+            Send("memory_searcher", state),
+        ]
+
     workflow = StateGraph(AgentState)
-    workflow.add_node("researcher", researcher_agent)
+    workflow.add_node("web_searcher", web_searcher_node)
+    workflow.add_node("memory_searcher", memory_searcher_node)
     workflow.add_node("responder", responder_agent)
-    workflow.set_entry_point("researcher")
-    workflow.add_edge("researcher", "responder")
+
+    workflow.set_entry_point("__start__")
+    workflow.add_conditional_edges(
+        "__start__",
+        start_parallel_search,
+        ["web_searcher", "memory_searcher"]
+    )
+    workflow.add_edge("web_searcher", "responder")
+    workflow.add_edge("memory_searcher", "responder")
     workflow.add_edge("responder", END)
     return workflow.compile()
 
