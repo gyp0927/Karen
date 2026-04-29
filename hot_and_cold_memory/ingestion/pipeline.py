@@ -148,6 +148,9 @@ class MemoryPipeline:
             # Hot tier capacity check
             await self._enforce_hot_tier_capacity()
 
+            # Memory limit check: archive oldest memories to RAG knowledge base
+            await self._archive_old_memories()
+
             elapsed = (datetime.utcnow() - start_time).total_seconds() * 1000
 
             # Update Prometheus gauges
@@ -249,3 +252,100 @@ class MemoryPipeline:
                     )
         except Exception as e:
             logger.error("hot_tier_capacity_check_failed", error=str(e))
+
+    async def _archive_old_memories(self) -> None:
+        """当记忆总数超过 MAX_MEMORY_COUNT 时，把最旧的归档到 RAG 知识库并删除。
+
+        流程:
+        1. 检查总记忆数
+        2. 超出部分 → 获取最旧的记忆
+        3. 合并内容 → 添加到 RAG 知识库（异步，不阻塞）
+        4. 归档成功 → 从记忆系统删除
+        5. 归档失败 → 保留记忆，不删除（防丢数据）
+        """
+        try:
+            max_count = self.settings.MAX_MEMORY_COUNT
+            total = await self.metadata_store.count_total_memories()
+            if total <= max_count:
+                return
+
+            to_archive = total - max_count
+            # 多取 10% 的缓冲，避免频繁触发归档
+            to_archive = min(to_archive + max(1, max_count // 10), total)
+
+            oldest = await self.metadata_store.get_oldest_memories(limit=to_archive)
+            if not oldest:
+                return
+
+            # 构建归档文档内容
+            lines = [
+                f"# 记忆归档 - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"# 共归档 {len(oldest)} 条旧记忆",
+                "",
+            ]
+            for i, mem in enumerate(oldest, 1):
+                created = mem.created_at.strftime('%Y-%m-%d %H:%M') if mem.created_at else '未知'
+                source = mem.source or '未知来源'
+                tier = mem.tier.value if mem.tier else 'unknown'
+                lines.append(f"## [{i}] {created} | 来源: {source} | 层级: {tier}")
+                lines.append(mem.content)
+                lines.append("")
+
+            archive_text = "\n".join(lines)
+            archive_source = f"memory_archive_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+
+            # 动态导入 RAG 模块，避免循环依赖
+            import asyncio
+            try:
+                import importlib
+                rag = importlib.import_module("core.rag")
+                # 用线程池运行同步的 add_document，避免阻塞事件循环
+                archived_count = await asyncio.to_thread(
+                    rag.add_document,
+                    archive_text,
+                    source=archive_source,
+                )
+                if archived_count == 0:
+                    logger.warning("archive_to_rag_no_chunks_added", source=archive_source)
+                    return  # 归档失败，不删除记忆
+
+                logger.info(
+                    "memories_archived_to_rag",
+                    archived=len(oldest),
+                    chunks=archived_count,
+                    source=archive_source,
+                    total_before=total,
+                    total_after=total - len(oldest),
+                )
+            except Exception as e:
+                logger.warning(
+                    "archive_to_rag_failed",
+                    error=str(e),
+                    memory_count=len(oldest),
+                )
+                return  # 归档失败，保留记忆（防止数据丢失）
+
+            # 归档成功 → 从记忆系统删除
+            deleted = 0
+            for mem in oldest:
+                try:
+                    if await self.delete_memory(mem.memory_id):
+                        deleted += 1
+                except Exception as e:
+                    logger.warning(
+                        "memory_delete_failed_during_archive",
+                        memory_id=str(mem.memory_id),
+                        error=str(e),
+                    )
+
+            logger.info(
+                "auto_archive_complete",
+                archived=len(oldest),
+                deleted=deleted,
+                total=total,
+                new_total=total - deleted,
+                source=archive_source,
+            )
+
+        except Exception as e:
+            logger.error("archive_old_memories_failed", error=str(e))

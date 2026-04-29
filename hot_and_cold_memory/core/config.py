@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     HOT_TIER_CAPACITY: int = 10000
     HOT_TIER_EVICT_PERCENT: float = 0.1
 
+    # Memory limit
+    MAX_MEMORY_COUNT: int = 1000  # 总记忆数超过此值时自动删除最旧的
+
     # Monitoring
     METRICS_PORT: int = 9090
     ENABLE_TRACING: bool = True

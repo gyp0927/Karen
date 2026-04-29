@@ -263,6 +263,26 @@ class PostgresMetadataStore(BaseMetadataStore):
             )
             return result.scalar() or 0
 
+    async def count_total_memories(self) -> int:
+        """Count all memories across all tiers."""
+        async with self.async_session() as session:
+            from sqlalchemy import func
+            result = await session.execute(
+                select(func.count(MemoryModel.memory_id))
+            )
+            return result.scalar() or 0
+
+    async def get_oldest_memories(self, limit: int = 10) -> list[MemoryItem]:
+        """Get the oldest memories by created_at (ascending)."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(MemoryModel)
+                .order_by(MemoryModel.created_at.asc())
+                .limit(limit)
+            )
+            models = result.scalars().all()
+            return [_memory_to_item(m) for m in models]
+
     async def query_memories_by_tier_and_score(
         self,
         tier: Tier,

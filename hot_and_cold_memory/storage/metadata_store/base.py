@@ -162,6 +162,23 @@ class BaseMetadataStore(ABC):
         pass
 
     @abstractmethod
+    async def count_total_memories(self) -> int:
+        """Count all memories across all tiers."""
+        pass
+
+    @abstractmethod
+    async def get_oldest_memories(self, limit: int = 10) -> list[MemoryItem]:
+        """Get the oldest memories by created_at (ascending).
+
+        Args:
+            limit: Number of memories to return.
+
+        Returns:
+            List of oldest memories.
+        """
+        pass
+
+    @abstractmethod
     async def increment_access(
         self,
         memory_ids: list[uuid.UUID],
