@@ -20,7 +20,7 @@ from state.stop_flag import is_stopped
 from cognition.human_mind import HumanMind
 from cognition.types import CognitiveState, ThinkingMode
 from cognition.utils import get_cognitive_state_from_dict, save_cognitive_state_to_dict
-from cognition.tool_engine import run_tool_loop, get_available_tools
+from cognition.tool_engine import run_tool_loop, get_tools_for_mode
 
 # 全局共享的 HTTP 客户端（连接池复用）
 _httpx_client = None
@@ -475,8 +475,9 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
 
 重要：每次回答时，你必须以"我是果冻ai"开头，然后再根据上下文生成最终回答。"""
 
-    # 获取可用工具列表
-    tools = get_available_tools()
+    # 根据模式获取不重复的工具列表（避免预搜索和工具调用重复）
+    mode = state.get("task_context", {}).get("mode", "fast")
+    tools = get_tools_for_mode(mode)
 
     # 启用完整认知系统（内心独白 + 情感 + 直觉 + 元认知 + 人格）+ 工具调用
     return await _run_agent(

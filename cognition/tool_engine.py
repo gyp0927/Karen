@@ -130,6 +130,21 @@ def get_available_tools() -> list[BaseTool]:
     return list(DEFAULT_TOOLS)
 
 
+def get_tools_for_mode(mode: str) -> list[BaseTool]:
+    """根据运行模式获取不重复的工具列表。
+
+    避免预搜索和 Responder 工具调用重复：
+    - fast 模式: 预搜了 web + memory，Responder 只需 knowledge + execute_python
+    - coordination 模式: 预搜了 web + memory + knowledge，Responder 只需 execute_python
+    - planning 模式: 同 fast 模式
+    """
+    if mode == "coordination":
+        # 协调模式 Researcher 已并行搜 web + memory + knowledge
+        return [execute_python]
+    # 快速/计划模式: web_searcher + memory_searcher 已并行搜索
+    return [knowledge_search, execute_python]
+
+
 async def execute_tool_call(tool_call: dict) -> str:
     """执行单个 tool_call 并返回结果字符串。
 
