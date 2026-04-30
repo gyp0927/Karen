@@ -22,7 +22,7 @@ from agents.factory import (
     create_agents, planner_node, parse_plan_from_response,
     set_current_llm_config, set_streaming_callback,
     clear_streaming_callback, clear_llm_cache, get_llm,
-    web_searcher_agent, memory_searcher_agent,
+    web_searcher_agent, memory_searcher_agent, tool_caller_node,
 )
 from graph.orchestrator import create_coordination_graph, create_fast_graph
 from state.manager import SessionManager
@@ -442,9 +442,9 @@ def init_agents():
 
     # 始终编译两种图，运行时根据 socket 的 fast_mode 选择
     coordinator, researcher, responder, reviewer = create_agents(language="zh", fast_mode=False)
-    coordination_graph = create_coordination_graph(coordinator, researcher, responder)
-    # 快速模式：并行 WebSearcher + MemorySearcher → Responder（无 Coordinator/Researcher）
-    fast_graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, responder)
+    coordination_graph = create_coordination_graph(coordinator, researcher, tool_caller_node, responder)
+    # 快速模式：并行 WebSearcher + MemorySearcher + ToolCaller → Responder
+    fast_graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder)
 
     logger.info("Agent graphs initialized")
 

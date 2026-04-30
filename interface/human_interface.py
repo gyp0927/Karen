@@ -13,8 +13,11 @@ from cognition.human_mind import HumanMind
 from cognition.types import CognitiveState, ThinkingMode
 from cognition.utils import serialize_cognitive_state
 
-# Fast graph 需要的搜索函数
-from agents.factory import web_searcher_agent, memory_searcher_agent, responder_node
+# Fast graph 需要的搜索和工具函数
+from agents.factory import (
+    web_searcher_agent, memory_searcher_agent,
+    tool_caller_node, responder_node,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +71,14 @@ class HumanInterface:
         logger.info("认知系统已初始化：内心独白 + 情感 + 直觉 + 元认知 + 人格")
 
         if fast_mode or coordinator is None:
-            self.graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, responder_node)
+            self.graph = create_fast_graph(
+                web_searcher_agent, memory_searcher_agent,
+                tool_caller_node, responder_node,
+            )
         else:
-            self.graph = create_coordination_graph(coordinator, researcher, responder)
+            self.graph = create_coordination_graph(
+                coordinator, researcher, tool_caller_node, responder_node,
+            )
 
         self.responder = responder
         self.reviewer = reviewer

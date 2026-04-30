@@ -18,9 +18,15 @@ from langchain_core.messages import HumanMessage
 async def benchmark_fast():
     """测试快速模式（跳过Coordinator，并行搜索+Responder）"""
     from graph.orchestrator import create_fast_graph
-    from agents.factory import web_searcher_agent, memory_searcher_agent, responder_node
+    from agents.factory import (
+        web_searcher_agent, memory_searcher_agent,
+        tool_caller_node, responder_node,
+    )
 
-    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, responder_node)
+    graph = create_fast_graph(
+        web_searcher_agent, memory_searcher_agent,
+        tool_caller_node, responder_node,
+    )
 
     state = {
         "messages": [HumanMessage(content="你好")],
@@ -50,7 +56,9 @@ async def benchmark_coordination():
     from graph.orchestrator import create_coordination_graph
     from agents.factory import coordinator_node, researcher_node, responder_node
 
-    graph = create_coordination_graph(coordinator_node, researcher_node, responder_node)
+    graph = create_coordination_graph(
+        coordinator_node, researcher_node, tool_caller_node, responder_node,
+    )
 
     state = {
         "messages": [HumanMessage(content="你好")],

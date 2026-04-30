@@ -199,7 +199,7 @@ async def _run_agent(
         on_token: 每收到一个 token chunk 时调用的回调函数(token_text: str)
         enable_cognition: 是否启用认知系统
         enable_monologue: 是否启用内心独白（coordinator等短输出agent可关闭）
-        tools: 可用工具列表（仅 responder 传入，启用 LLM 自主工具调用）
+        tools: 可用工具列表（responder 使用）
     """
     # 认知系统初始化
     cognitive_state = get_cognitive_state_from_dict(state)
@@ -255,7 +255,7 @@ async def _run_agent(
         llm = llm.bind(max_tokens=80)
 
     # 工具调用分支：如果提供了 tools，走 LLM 自主工具调用循环
-    if tools and agent_name == "responder":
+    if tools:
         stream_cb = on_token if on_token else get_streaming_callback(sid)
         logger.info(f"[{agent_name}] 启用工具调用模式，工具数={len(tools)}")
         response = await run_tool_loop(
@@ -304,6 +304,64 @@ async def coordinator_node(state: dict, sid: str | None = None) -> dict:
     """协调者Agent - 分析需求并决定路由（启用认知系统）"""
     # Coordinator 关闭内心独白（输出格式限制），但启用情感和直觉
     return await _run_agent(state, COORDINATOR_PROMPT, "coordinator", sid, enable_cognition=True)
+
+
+TOOL_CALLER_PROMPT = """你是 ToolCaller（工具调用专家）。
+
+你的职责：
+1. 分析用户问题是否需要调用非搜索类工具（如计算、代码执行）
+2. 如果需要，调用合适的工具获取结果
+3. 将工具执行结果以简洁的方式返回
+
+可用工具：
+- execute_python: 执行 Python 代码，用于数学计算、数据处理、验证代码等
+
+注意：
+- 不要调用搜索类工具（联网搜索、记忆搜索、知识库搜索），这些由其他 Agent 处理
+- 如果不需要调用工具，返回空即可
+- 工具执行结果要简洁，不要过多解释"""
+
+
+def _need_tool_call(query: str) -> bool:
+    """判断是否需要非搜索类工具调用（计算、代码等）。"""
+    q = query.lower()
+    if any(kw in q for kw in ["计算", "等于多少", "+", "*", "/", "平方", "次方", "百分比"]):
+        return True
+    if any(kw in q for kw in ["运行代码", "执行代码", "算一下", "验证"]):
+        return True
+    return False
+
+
+async def tool_caller_node(state: dict, sid: str | None = None) -> dict:
+    """工具调用子节点 - 直接执行非搜索类工具，不走 _run_agent 的完整 Agent 流程。
+
+    结果以 SystemMessage 注入 Responder 上下文。
+    """
+    query = state["messages"][-1].content if state["messages"] else ""
+
+    # 快速判断：不需要工具时直接返回空
+    if not _need_tool_call(query):
+        return {"messages": []}
+
+    from cognition.tool_engine import execute_python, run_tool_loop
+
+    llm = get_llm(sid or "")
+    tools = [execute_python]
+    messages = [SystemMessage(content=TOOL_CALLER_PROMPT)] + list(state["messages"])
+
+    # 执行工具调用循环
+    response = await run_tool_loop(
+        llm, messages, tools,
+        max_iterations=2,
+        sid=sid or "",
+    )
+
+    if response:
+        return {"messages": [SystemMessage(
+            content=f"【工具执行结果】\n\n{response}",
+            name="tool_caller",
+        )]}
+    return {"messages": []}
 
 
 async def _safe_search(
@@ -475,14 +533,11 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
 
 重要：每次回答时，你必须以"我是果冻ai"开头，然后再根据上下文生成最终回答。"""
 
-    # 根据模式获取不重复的工具列表（避免预搜索和工具调用重复）
-    mode = state.get("task_context", {}).get("mode", "fast")
-    tools = get_tools_for_mode(mode)
-
-    # 启用完整认知系统（内心独白 + 情感 + 直觉 + 元认知 + 人格）+ 工具调用
+    # Responder 只负责生成最终回答，不再自己调用工具
+    # 搜索和工具调用由前置并行子 Agent 完成
     return await _run_agent(
         state, responder_prompt, "responder", sid,
-        enable_cognition=True, tools=tools,
+        enable_cognition=True, tools=None,
     )
 
 

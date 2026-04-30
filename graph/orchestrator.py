@@ -98,12 +98,18 @@ def create_multi_agent_graph(
     return workflow.compile()
 
 
-def create_coordination_graph(coordinator_agent, researcher_agent, responder_agent):
-    """创建协调+研究+响应的协作图（Coordinator判断是否需要Researcher）"""
+def create_coordination_graph(coordinator_agent, researcher_agent, tool_caller, responder_agent):
+    """协调模式：Coordinator → Researcher → ToolCaller → Responder
+
+    Researcher 并行搜索 web + memory + knowledge，
+    ToolCaller 按需执行非搜索工具，
+    Responder 只负责生成最终回答。
+    """
     workflow = StateGraph(AgentState)
 
     workflow.add_node("coordinator", coordinator_agent)
     workflow.add_node("researcher", researcher_agent)
+    workflow.add_node("tool_caller", tool_caller)
     workflow.add_node("responder", responder_agent)
 
     workflow.set_entry_point("coordinator")
@@ -114,17 +120,17 @@ def create_coordination_graph(coordinator_agent, researcher_agent, responder_age
         {"researcher": "researcher", "responder": "responder"}
     )
 
-    workflow.add_edge("researcher", "responder")
+    workflow.add_edge("researcher", "tool_caller")
+    workflow.add_edge("tool_caller", "responder")
     workflow.add_edge("responder", END)
 
     return workflow.compile()
 
 
-def create_fast_graph(web_searcher, memory_searcher, responder_agent):
-    """快速/计划模式：并行 WebSearcher + MemorySearcher → Responder
+def create_fast_graph(web_searcher, memory_searcher, tool_caller, responder_agent):
+    """快速/计划模式：并行 WebSearcher + MemorySearcher + ToolCaller → Responder
 
-    无 Coordinator、无 Researcher LLM 调用，直接并行搜索后生成回答。
-    基于三层意图识别（规则+上下文+LLM）智能决定是否跳过搜索。
+    无 Coordinator，三个子 Agent 按需并行执行，Responder 只负责生成。
     """
 
     async def _search_node(
@@ -133,7 +139,7 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
         skip_key: str,
         node_name: str,
     ) -> dict:
-        """通用搜索节点——消除 web_searcher_node 和 memory_searcher_node 的重复。"""
+        """通用搜索节点"""
         query = state["messages"][-1].content
         intent = state.get("task_context", {}).get("intent_result")
         if intent and intent.get(skip_key):
@@ -154,15 +160,28 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
     async def memory_searcher_node(state: AgentState) -> dict:
         return await _search_node(state, memory_searcher, "skip_memory", "memory")
 
+    async def tool_caller_node(state: AgentState) -> dict:
+        return await tool_caller(state)
+
+    def _need_tool_call(query: str) -> bool:
+        """判断是否需要非搜索类工具调用（计算、代码等）。"""
+        q = query.lower()
+        if any(kw in q for kw in ["计算", "等于多少", "+", "*", "/", "平方", "次方", "百分比"]):
+            return True
+        if any(kw in q for kw in ["运行代码", "执行代码", "算一下", "验证"]):
+            return True
+        return False
+
     def _route_from_intent(
         state: AgentState,
         skip_search: bool,
         skip_memory: bool,
+        need_tools: bool,
         source: str,
         confidence: float = 0.0,
         intent: str = "",
     ):
-        """根据意图结果执行统一路由——消除重复的路由逻辑。"""
+        """根据意图结果执行统一路由。"""
         state["task_context"]["intent_result"] = {
             "intent": intent,
             "confidence": confidence,
@@ -172,7 +191,7 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
             "source": source,
         }
 
-        if skip_search and skip_memory:
+        if skip_search and skip_memory and not need_tools:
             return Send("responder", state)
 
         sends = []
@@ -180,24 +199,24 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
             sends.append(Send("web_searcher", state))
         if not skip_memory:
             sends.append(Send("memory_searcher", state))
+        if need_tools:
+            sends.append(Send("tool_caller", state))
         if not sends:
             return Send("responder", state)
         return sends
 
     def start_parallel_search(state: AgentState):
-        """基于直觉引擎+意图识别的双层智能路由。
-
-        1. 直觉引擎高信心判断 → 直接路由（0ms）
-        2. 现有意图分类器 → 辅助决策
-        3. 不确定的 → 并行搜索
-        """
+        """快速模式路由：按需并行启动子 Agent。"""
         from core.intent import classify_intent_sync
 
         query = state["messages"][-1].content
         history = state.get("messages", [])
         history_turns = len(history) // 2
 
-        # 第一层：直觉引擎（系统1——快速、经验驱动）
+        # 判断是否需要工具调用
+        need_tools = _need_tool_call(query)
+
+        # 第一层：直觉引擎
         intuition = get_intuition_engine()
         intuition_result = intuition.route_decision(query, history_turns)
 
@@ -205,24 +224,25 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
         state["task_context"]["intuition_result"] = intuition_result
         state["task_context"]["thinking_mode"] = intuition_result["thinking_mode"].value
 
-        # 直觉高信心时，直接用直觉决策
         if intuition_result["intuition_confidence"] > 0.7:
             return _route_from_intent(
                 state,
                 skip_search=intuition_result["skip_search"],
                 skip_memory=intuition_result["skip_memory"],
+                need_tools=need_tools,
                 source="intuition",
                 confidence=intuition_result["intuition_confidence"],
                 intent=intuition_result["route"],
             )
 
-        # 第二层：回退到现有意图分类器（系统2——理性分析）
+        # 第二层：回退到意图分类器
         result = classify_intent_sync(query, history=history)
 
         return _route_from_intent(
             state,
             skip_search=result.skip_search,
             skip_memory=result.skip_memory,
+            need_tools=need_tools,
             source=result.source,
             confidence=result.confidence,
             intent=result.intent,
@@ -231,15 +251,22 @@ def create_fast_graph(web_searcher, memory_searcher, responder_agent):
     workflow = StateGraph(AgentState)
     workflow.add_node("web_searcher", web_searcher_node)
     workflow.add_node("memory_searcher", memory_searcher_node)
+    workflow.add_node("tool_caller", tool_caller_node)
     workflow.add_node("responder", responder_agent)
 
     workflow.add_conditional_edges(
         "__start__",
         start_parallel_search,
-        {"web_searcher": "web_searcher", "memory_searcher": "memory_searcher", "responder": "responder"}
+        {
+            "web_searcher": "web_searcher",
+            "memory_searcher": "memory_searcher",
+            "tool_caller": "tool_caller",
+            "responder": "responder",
+        }
     )
     workflow.add_edge("web_searcher", "responder")
     workflow.add_edge("memory_searcher", "responder")
+    workflow.add_edge("tool_caller", "responder")
     workflow.add_edge("responder", END)
     return workflow.compile()
 

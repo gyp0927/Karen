@@ -26,15 +26,15 @@ def test(name):
 @test("图编译 - 协调模式")
 async def test_coordination_graph():
     from graph.orchestrator import create_coordination_graph
-    from agents.factory import coordinator_node, researcher_node, responder_node
-    graph = create_coordination_graph(coordinator_node, researcher_node, responder_node)
+    from agents.factory import coordinator_node, researcher_node, tool_caller_node, responder_node
+    graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
     assert graph is not None
 
 @test("图编译 - 快速模式")
 async def test_fast_graph():
     from graph.orchestrator import create_fast_graph
-    from agents.factory import web_searcher_agent, memory_searcher_agent, responder_node
-    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, responder_node)
+    from agents.factory import web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node
+    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node)
     assert graph is not None
 
 @test("图编译 - 审查模式")
@@ -182,10 +182,10 @@ async def test_session_manager():
 @test("端到端 - 协调模式")
 async def test_chat_coordination():
     from graph.orchestrator import create_coordination_graph
-    from agents.factory import coordinator_node, researcher_node, responder_node
+    from agents.factory import coordinator_node, researcher_node, tool_caller_node, responder_node
     from langchain_core.messages import HumanMessage
 
-    graph = create_coordination_graph(coordinator_node, researcher_node, responder_node)
+    graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
     initial_state = {
         "messages": [HumanMessage(content="你好")],
         "active_agent": None,
@@ -216,10 +216,10 @@ async def test_chat_coordination():
 @test("端到端 - 快速模式")
 async def test_chat_fast():
     from graph.orchestrator import create_fast_graph
-    from agents.factory import web_searcher_agent, memory_searcher_agent, responder_node
+    from agents.factory import web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node
     from langchain_core.messages import HumanMessage
 
-    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, responder_node)
+    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node)
     initial_state = {
         "messages": [HumanMessage(content="你好")],
         "active_agent": None,
