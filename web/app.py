@@ -1577,7 +1577,11 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         except Exception as e:
             logger.debug(f"Failed to emit {event} to {sid}: {e}")
 
-    _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
+    # 根据模式显示不同的思考状态提示
+    if state.fast_mode:
+        _safe_emit("thinking", {"message": "正在思考..."})
+    else:
+        _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
 
     # 设置流式输出回调 - 低延迟 batch 策略：每 2 个 token flush，
     # 或遇到换行/句末标点立即 flush，同时设置 60ms 超时避免单个 token 延迟
