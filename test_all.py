@@ -175,6 +175,8 @@ async def test_session_manager():
     mgr.add_human_message("你好")
     messages = mgr.get_messages()
     assert len(messages) == 1
+    # 清理测试数据，避免污染 web 界面的会话列表
+    mgr.delete_session(session_id)
 
 # ========== 测试 10: 端到端聊天（协调模式）==========
 @test("端到端 - 协调模式")
