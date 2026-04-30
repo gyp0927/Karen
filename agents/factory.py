@@ -7,6 +7,7 @@ from typing import Optional, Callable
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AIMessage
+from langchain_core.tools import BaseTool
 
 from core.config import get_api_key, get_base_url, get_model_name, get_provider
 from core.plugin_system import get_plugins_prompt
@@ -19,6 +20,7 @@ from state.stop_flag import is_stopped
 from cognition.human_mind import HumanMind
 from cognition.types import CognitiveState, ThinkingMode
 from cognition.utils import get_cognitive_state_from_dict, save_cognitive_state_to_dict
+from cognition.tool_engine import run_tool_loop, get_available_tools
 
 # 全局共享的 HTTP 客户端（连接池复用）
 _httpx_client = None
@@ -185,8 +187,9 @@ async def _run_agent(
     on_token: Optional[Callable[[str], None]] = None,
     enable_cognition: bool = True,
     enable_monologue: bool = True,
+    tools: Optional[list[BaseTool]] = None,
 ) -> dict:
-    """通用 Agent 执行函数（增强版，接入认知系统）。
+    """通用 Agent 执行函数（增强版，接入认知系统 + 工具调用）。
 
     参数:
         state: 当前状态字典
@@ -196,6 +199,7 @@ async def _run_agent(
         on_token: 每收到一个 token chunk 时调用的回调函数(token_text: str)
         enable_cognition: 是否启用认知系统
         enable_monologue: 是否启用内心独白（coordinator等短输出agent可关闭）
+        tools: 可用工具列表（仅 responder 传入，启用 LLM 自主工具调用）
     """
     # 认知系统初始化
     cognitive_state = get_cognitive_state_from_dict(state)
@@ -250,16 +254,28 @@ async def _run_agent(
     if agent_name == "coordinator":
         llm = llm.bind(max_tokens=80)
 
-    response = ""
-    stream_cb = on_token if on_token else (get_streaming_callback(sid) if agent_name == "responder" else None)
-    async for chunk in llm.astream(messages):
-        if is_stopped(sid):
-            logger.info(f"[{agent_name}] Generation stopped by user")
-            break
-        if chunk.content:
-            response += chunk.content
-            if stream_cb:
-                stream_cb(chunk.content)
+    # 工具调用分支：如果提供了 tools，走 LLM 自主工具调用循环
+    if tools and agent_name == "responder":
+        stream_cb = on_token if on_token else get_streaming_callback(sid)
+        logger.info(f"[{agent_name}] 启用工具调用模式，工具数={len(tools)}")
+        response = await run_tool_loop(
+            llm, messages, tools,
+            max_iterations=3,
+            sid=sid or "",
+            on_token=stream_cb,
+        )
+    else:
+        # 普通流式生成（原有逻辑）
+        response = ""
+        stream_cb = on_token if on_token else (get_streaming_callback(sid) if agent_name == "responder" else None)
+        async for chunk in llm.astream(messages):
+            if is_stopped(sid):
+                logger.info(f"[{agent_name}] Generation stopped by user")
+                break
+            if chunk.content:
+                response += chunk.content
+                if stream_cb:
+                    stream_cb(chunk.content)
 
     # 写入缓存
     if cache and cache_enabled and response:
@@ -429,7 +445,7 @@ async def researcher_node(state: dict, sid: str | None = None) -> dict:
 
 
 async def responder_node(state: dict, sid: str | None = None) -> dict:
-    """响应者Agent - 生成最终回答（完整认知系统）"""
+    """响应者Agent - 生成最终回答（完整认知系统 + 工具调用）"""
     plugin_prompt = get_plugins_prompt()
 
     # 读取自动检测到的用户语言（从 task_context 中获取）
@@ -454,12 +470,19 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
 1. 提供清晰、友好的回复
 2. 以易于理解的方式呈现信息
 3. 保持对话式、亲切的风格
+4. 当需要实时信息、计算、或查询记忆时，主动调用工具获取准确信息
 {plugin_prompt}{lang_instr}
 
 重要：每次回答时，你必须以"我是果冻ai"开头，然后再根据上下文生成最终回答。"""
 
-    # 启用完整认知系统（内心独白 + 情感 + 直觉 + 元认知 + 人格）
-    return await _run_agent(state, responder_prompt, "responder", sid, enable_cognition=True)
+    # 获取可用工具列表
+    tools = get_available_tools()
+
+    # 启用完整认知系统（内心独白 + 情感 + 直觉 + 元认知 + 人格）+ 工具调用
+    return await _run_agent(
+        state, responder_prompt, "responder", sid,
+        enable_cognition=True, tools=tools,
+    )
 
 
 async def reviewer_node(state: dict, language: str = "zh", sid: str | None = None) -> dict:
