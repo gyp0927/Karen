@@ -18,6 +18,7 @@ from state.stop_flag import is_stopped
 # 认知系统导入
 from cognition.human_mind import HumanMind
 from cognition.types import CognitiveState, ThinkingMode
+from cognition.utils import get_cognitive_state_from_dict, save_cognitive_state_to_dict
 
 # 全局共享的 HTTP 客户端（连接池复用）
 _httpx_client = None
@@ -155,18 +156,25 @@ def clear_llm_cache():
     logger.info("LLM cache cleared")
 
 
-def _get_cognitive_state(state: dict) -> CognitiveState:
-    """从 state 中提取或创建认知状态"""
-    cog_dict = state.get("cognitive_state")
-    if cog_dict:
-        return CognitiveState(**cog_dict)
-    return CognitiveState()
+def _get_cache_provider_model() -> tuple[str, str]:
+    """获取当前 provider 和 model 名称（用于缓存 key）。
+
+    消除缓存读写中重复的 get_provider() / get_model_name() 调用。
+    """
+    return get_provider(), get_model_name()
 
 
-def _save_cognitive_state(state: dict, cognitive_state: CognitiveState) -> None:
-    """将认知状态保存回 state"""
-    from dataclasses import asdict
-    state["cognitive_state"] = asdict(cognitive_state)
+def _build_result_dict(
+    response: str,
+    agent_name: str,
+    cognitive_state: CognitiveState | None = None,
+) -> dict:
+    """构建标准返回字典，自动包含认知状态（如果提供）。"""
+    result = {"messages": [AIMessage(content=response, name=agent_name)]}
+    if cognitive_state is not None:
+        from dataclasses import asdict
+        result["cognitive_state"] = asdict(cognitive_state)
+    return result
 
 
 async def _run_agent(
@@ -190,7 +198,7 @@ async def _run_agent(
         enable_monologue: 是否启用内心独白（coordinator等短输出agent可关闭）
     """
     # 认知系统初始化
-    cognitive_state = _get_cognitive_state(state)
+    cognitive_state = get_cognitive_state_from_dict(state)
     # Coordinator 和 Reviewer 禁用内心独白（输出格式严格限制）
     should_use_monologue = enable_monologue and agent_name not in ("coordinator",)
     mind = HumanMind(
@@ -217,23 +225,19 @@ async def _run_agent(
     logger.debug(f"[{agent_name}] Starting generation, messages_count={len(messages)}")
 
     # 对 responder 和 coordinator 节点启用缓存
-    # - responder: 缓存最终输出，避免重复生成相同回答
-    # - coordinator: 缓存路由决策，相同问题直接走缓存路径
     cache_enabled = agent_name in ("responder", "coordinator")
     cache = get_cache() if cache_enabled else None
+    cache_key = _get_cache_provider_model()
+
     if cache and cache_enabled:
         try:
-            _provider = get_provider()
-            _model = get_model_name()
-            cached_response = cache.get(messages, _provider, _model)
+            cached_response = cache.get(messages, cache_key[0], cache_key[1])
             if cached_response is not None:
                 logger.info(f"[{agent_name}] Cache hit, skipping generation")
-                # coordinator 不需要流式输出，直接返回
                 if agent_name == "coordinator":
                     return {"messages": [AIMessage(content=cached_response, name=agent_name)]}
                 stream_cb = on_token if on_token else get_streaming_callback(sid)
                 if stream_cb:
-                    # 模拟流式输出缓存内容（分块发送，避免前端卡顿）
                     chunk_size = 20
                     for i in range(0, len(cached_response), chunk_size):
                         stream_cb(cached_response[i:i+chunk_size])
@@ -242,13 +246,10 @@ async def _run_agent(
             logger.warning(f"Cache lookup failed: {e}, falling back to generation")
 
     # 限制 Coordinator 输出长度：只需要路由标记，最多 80 tokens
-    # 大幅减少 Coordinator 节点的耗时（从 1-2 秒降到 0.3-0.5 秒）
     if agent_name == "coordinator":
         llm = llm.bind(max_tokens=80)
 
     response = ""
-    # 只有 responder 节点触发流式回调（最终输出）
-    # coordinator 和 reviewer 是内部节点，不需要流式展示
     stream_cb = on_token if on_token else (get_streaming_callback(sid) if agent_name == "responder" else None)
     async for chunk in llm.astream(messages):
         if is_stopped(sid):
@@ -259,12 +260,10 @@ async def _run_agent(
             if stream_cb:
                 stream_cb(chunk.content)
 
-    # 写入缓存（responder 和 coordinator）
+    # 写入缓存
     if cache and cache_enabled and response:
         try:
-            _provider = get_provider()
-            _model = get_model_name()
-            cache.set(messages, _provider, _model, response)
+            cache.set(messages, cache_key[0], cache_key[1], response)
         except (OSError, ValueError) as e:
             logger.warning(f"Cache write failed: {e}")
 
@@ -274,16 +273,14 @@ async def _run_agent(
             agent_name, query, response, cognitive_state, had_monologue
         )
         # 保存更新后的认知状态
-        _save_cognitive_state(state, cognitive_state)
+        save_cognitive_state_to_dict(state, cognitive_state)
         logger.info(f"[{agent_name}] 💭 认知处理完成，turn={cognitive_state.turn_count}")
 
     logger.debug(f"[{agent_name}] Generation complete, response_length={len(response)}")
-    result_dict = {"messages": [AIMessage(content=response, name=agent_name)]}
-    # 将认知状态返回，以便langgraph合并到全局状态
-    if enable_cognition:
-        from dataclasses import asdict
-        result_dict["cognitive_state"] = asdict(cognitive_state)
-    return result_dict
+    return _build_result_dict(
+        response, agent_name,
+        cognitive_state=cognitive_state if enable_cognition else None,
+    )
 
 
 async def coordinator_node(state: dict, sid: str | None = None) -> dict:
@@ -292,59 +289,83 @@ async def coordinator_node(state: dict, sid: str | None = None) -> dict:
     return await _run_agent(state, COORDINATOR_PROMPT, "coordinator", sid, enable_cognition=True)
 
 
-async def web_searcher_agent(query: str) -> str:
-    """联网搜索子 Agent - 执行 DuckDuckGo 搜索并总结结果。"""
+async def _safe_search(
+    search_fn: callable,
+    label: str,
+    *args,
+    success_check: callable = None,
+    **kwargs,
+) -> str:
+    """通用搜索包装器——统一异常处理和结果格式化。
+
+    消除 web_searcher_agent / memory_searcher_agent / knowledge_searcher_agent
+    中重复的 try/except 模式。
+    """
     try:
-        from tools.search import search_and_summarize
-        # search_and_summarize 是同步函数，使用 asyncio.to_thread 避免阻塞事件循环
-        result = await asyncio.to_thread(search_and_summarize, query, max_results=3)
-        if result and "未找到" not in result:
-            return f"[联网搜索结果]\n\n{result}"
-    except ImportError:
+        result = await search_fn(*args, **kwargs)
+        if success_check:
+            if success_check(result):
+                return f"[{label}]\n\n{result}"
+        elif result:
+            return f"[{label}]\n\n{result}"
+    except asyncio.TimeoutError:
         pass
     except (TimeoutError, ConnectionError):
         pass
+    except ImportError:
+        pass
     except Exception as e:
-        logger.warning(f"Web search agent failed: {e}")
+        logger.warning(f"{label} failed: {e}")
     return ""
+
+
+async def web_searcher_agent(query: str) -> str:
+    """联网搜索子 Agent - 执行 DuckDuckGo 搜索并总结结果。"""
+    from tools.search import search_and_summarize
+
+    def _check(result: str) -> bool:
+        return result and "未找到" not in result
+
+    return await _safe_search(
+        lambda q: asyncio.to_thread(search_and_summarize, q, max_results=3),
+        "联网搜索结果",
+        query,
+        success_check=_check,
+    )
 
 
 async def memory_searcher_agent(query: str, user_id: str = "") -> str:
     """记忆搜索子 Agent - 从自适应记忆系统检索相关记忆。"""
-    try:
-        from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
-        if _MEMORY_SYSTEM_AVAILABLE:
-            store = get_memory_store()
-            memories = await asyncio.wait_for(
-                store.retrieve(query, top_k=5, user_id=user_id),
-                timeout=1.0,
-            )
-            if memories:
-                formatted = store.format_memories_for_prompt(memories)
-                if formatted:
-                    return f"[记忆检索结果]\n\n{formatted}"
-    except asyncio.TimeoutError:
-        pass
-    except Exception as e:
-        logger.warning(f"Memory search agent failed: {e}")
-    return ""
+    from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
+
+    async def _do_search(q: str, uid: str) -> str:
+        if not _MEMORY_SYSTEM_AVAILABLE:
+            return ""
+        store = get_memory_store()
+        memories = await asyncio.wait_for(
+            store.retrieve(q, top_k=5, user_id=uid),
+            timeout=1.0,
+        )
+        if memories:
+            return store.format_memories_for_prompt(memories) or ""
+        return ""
+
+    return await _safe_search(_do_search, "记忆检索结果", query, user_id)
 
 
 async def knowledge_searcher_agent(query: str) -> str:
     """知识库搜索子 Agent - 从 RAG 向量库检索相关文档。"""
-    try:
-        from core.rag import search_knowledge
-        # search_knowledge 是同步函数，使用 asyncio.to_thread 避免阻塞事件循环
-        result = await asyncio.to_thread(search_knowledge, query, top_k=3)
-        if result and "知识库为空" not in result and "未启用" not in result:
-            return f"[知识库检索结果]\n\n{result}"
-    except ImportError:
-        pass
-    except (TimeoutError, ConnectionError):
-        pass
-    except Exception as e:
-        logger.warning(f"Knowledge search agent failed: {e}")
-    return ""
+    from core.rag import search_knowledge
+
+    def _check(result: str) -> bool:
+        return result and "知识库为空" not in result and "未启用" not in result
+
+    return await _safe_search(
+        lambda q: asyncio.to_thread(search_knowledge, q, top_k=3),
+        "知识库检索结果",
+        query,
+        success_check=_check,
+    )
 
 
 async def _run_parallel_search(state: dict) -> str:

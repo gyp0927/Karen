@@ -1,5 +1,6 @@
 import logging
 import re
+from dataclasses import asdict
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
@@ -10,6 +11,7 @@ from core.model_router import get_router
 # 认知系统导入
 from cognition.human_mind import HumanMind
 from cognition.types import CognitiveState, ThinkingMode
+from cognition.utils import serialize_cognitive_state
 
 # Fast graph 需要的搜索函数
 from agents.factory import web_searcher_agent, memory_searcher_agent, responder_node
@@ -89,8 +91,6 @@ class HumanInterface:
 
         self.messages.add_human_message(content)
 
-        # 序列化认知状态
-        from dataclasses import asdict
         initial_state = {
             "messages": self.messages.get_messages_for_model(max_turns=10),
             "active_agent": None,
@@ -99,7 +99,7 @@ class HumanInterface:
             "base_model_response": None,
             "review_result": None,
             "awaiting_review": False,
-            "cognitive_state": asdict(self.cognitive_state),
+            "cognitive_state": serialize_cognitive_state(self.cognitive_state),
         }
 
         logger.info(f"Sending message, graph_type={'fast' if self.fast_mode else 'coordination'}")
@@ -133,7 +133,6 @@ class HumanInterface:
         from prompts.reviewer_prompt import build_review_prompt
         review_prompt = build_review_prompt(user_message, base_response, self.review_language)
 
-        from dataclasses import asdict
         review_state = {
             "messages": [HumanMessage(content=review_prompt)],
             "active_agent": "reviewer",
@@ -142,7 +141,7 @@ class HumanInterface:
             "base_model_response": base_response,
             "review_result": None,
             "awaiting_review": False,
-            "cognitive_state": asdict(self.cognitive_state),
+            "cognitive_state": serialize_cognitive_state(self.cognitive_state),
         }
 
         result = await self.reviewer(review_state)
