@@ -65,28 +65,6 @@ class EmotionalStateManager:
             state.fatigue = max(0.0, state.fatigue - 0.2)
             state.mood = Mood.SATISFIED
 
-    def rest(self, agent_name: str) -> None:
-        """让agent休息恢复"""
-        state = self.get_state(agent_name)
-        state.reset_fatigue()
-        logger.debug(f"[{agent_name}] 休息后恢复: 疲劳{state.fatigue:.1f}")
-
-    def get_all_states_prompt(self) -> str:
-        """获取所有agent的情感状态摘要（用于coordinator）"""
-        if not self._states:
-            return ""
-        lines = ["【团队成员状态】"]
-        for name, state in self._states.items():
-            mood_emoji = {
-                Mood.CALM: "😐", Mood.CURIOUS: "🤔", Mood.EXCITED: "✨",
-                Mood.CONFUSED: "😵", Mood.CAUTIOUS: "⚠️", Mood.FRUSTRATED: "😤",
-                Mood.SATISFIED: "😊", Mood.WORRIED: "😰",
-            }.get(state.mood, "•")
-            lines.append(f"  {mood_emoji} {name}: {state.mood.value} "
-                        f"(信心{state.confidence:.0%}, 疲劳{state.fatigue:.0%})")
-        return "\n".join(lines)
-
-
 # 全局单例
 _emotional_manager: Optional[EmotionalStateManager] = None
 
