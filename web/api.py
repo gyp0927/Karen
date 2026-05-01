@@ -4,10 +4,14 @@ import logging
 import os
 import tempfile
 
-from flask import Blueprint, request, send_file
+from flask import Blueprint, request, send_file, render_template
 
 api_bp = Blueprint("api", __name__)
 logger = logging.getLogger(__name__)
+
+# 显式导入 web.app 中定义的共享符号（避免隐式依赖）
+# 注：这些符号在 app.py 模块初始化后可用，由于 Flask Blueprint 的延迟执行机制不会导致循环导入
+from web.app import _GENERATED_DIR, has_valid_config, init_agents
 
 # ===== HTTP Routes =====
 

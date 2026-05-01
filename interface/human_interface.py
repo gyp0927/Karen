@@ -14,10 +14,9 @@ from cognition.types import CognitiveState, ThinkingMode
 from cognition.utils import serialize_cognitive_state
 
 # Fast graph 需要的搜索和工具函数
-from agents.factory import (
-    web_searcher_agent, memory_searcher_agent,
-    tool_caller_node, responder_node,
-)
+from agents.search import web_searcher_agent, memory_searcher_agent
+from agents.tools import tool_caller_node
+from agents.nodes import responder_node
 
 logger = logging.getLogger(__name__)
 

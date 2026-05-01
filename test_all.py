@@ -26,28 +26,31 @@ def test(name):
 @test("图编译 - 协调模式")
 async def test_coordination_graph():
     from graph.orchestrator import create_coordination_graph
-    from agents.factory import coordinator_node, researcher_node, tool_caller_node, responder_node
+    from agents.nodes import coordinator_node, researcher_node, responder_node
+    from agents.tools import tool_caller_node
     graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
     assert graph is not None
 
 @test("图编译 - 快速模式")
 async def test_fast_graph():
     from graph.orchestrator import create_fast_graph
-    from agents.factory import web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node
+    from agents.search import web_searcher_agent, memory_searcher_agent
+    from agents.tools import tool_caller_node
+    from agents.nodes import responder_node
     graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node)
     assert graph is not None
 
 @test("图编译 - 审查模式")
 async def test_multi_agent_graph():
     from graph.orchestrator import create_multi_agent_graph
-    from agents.factory import coordinator_node, researcher_node, responder_node, reviewer_node
+    from agents.nodes import coordinator_node, researcher_node, responder_node, reviewer_node
     graph = create_multi_agent_graph(coordinator_node, researcher_node, responder_node, reviewer_node)
     assert graph is not None
 
 # ========== 测试 2: Agent 节点 ==========
 @test("Agent 节点 - Coordinator")
 async def test_coordinator():
-    from agents.factory import coordinator_node
+    from agents.nodes import coordinator_node
     from langchain_core.messages import HumanMessage
     state = {"messages": [HumanMessage(content="什么是量子计算？")]}
     result = await coordinator_node(state)
@@ -56,7 +59,7 @@ async def test_coordinator():
 
 @test("Agent 节点 - Responder")
 async def test_responder():
-    from agents.factory import responder_node
+    from agents.nodes import responder_node
     from langchain_core.messages import HumanMessage
     state = {
         "messages": [HumanMessage(content="你好")],
@@ -70,20 +73,20 @@ async def test_responder():
 # ========== 测试 3: 搜索子 Agent ==========
 @test("搜索子 Agent - 联网搜索")
 async def test_web_searcher():
-    from agents.factory import web_searcher_agent
+    from agents.search import web_searcher_agent
     result = await web_searcher_agent("什么是Python")
     # 可能返回空（网络问题），但至少不报错
     assert isinstance(result, str)
 
 @test("搜索子 Agent - 记忆搜索")
 async def test_memory_searcher():
-    from agents.factory import memory_searcher_agent
+    from agents.search import memory_searcher_agent
     result = await memory_searcher_agent("你好", user_id="")
     assert isinstance(result, str)
 
 @test("搜索子 Agent - 知识库搜索")
 async def test_knowledge_searcher():
-    from agents.factory import knowledge_searcher_agent
+    from agents.search import knowledge_searcher_agent
     result = await knowledge_searcher_agent("测试")
     assert isinstance(result, str)
 
@@ -182,7 +185,9 @@ async def test_session_manager():
 @test("端到端 - 协调模式")
 async def test_chat_coordination():
     from graph.orchestrator import create_coordination_graph
-    from agents.factory import coordinator_node, researcher_node, tool_caller_node, responder_node
+    from agents.nodes import coordinator_node, researcher_node
+    from agents.tools import tool_caller_node
+    from agents.nodes import responder_node
     from langchain_core.messages import HumanMessage
 
     graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
@@ -216,7 +221,9 @@ async def test_chat_coordination():
 @test("端到端 - 快速模式")
 async def test_chat_fast():
     from graph.orchestrator import create_fast_graph
-    from agents.factory import web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node
+    from agents.search import web_searcher_agent, memory_searcher_agent
+    from agents.tools import tool_caller_node
+    from agents.nodes import responder_node
     from langchain_core.messages import HumanMessage
 
     graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node)

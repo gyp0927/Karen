@@ -20,12 +20,13 @@ from flask import Flask, render_template, request, send_file
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 
-from agents.factory import (
-    create_agents, planner_node, parse_plan_from_response,
+from agents.llm import (
     set_current_llm_config, set_streaming_callback,
     clear_streaming_callback, clear_llm_cache, get_llm,
-    web_searcher_agent, memory_searcher_agent, tool_caller_node,
 )
+from agents.nodes import create_agents, planner_node, parse_plan_from_response
+from agents.search import web_searcher_agent, memory_searcher_agent
+from agents.tools import tool_caller_node
 from graph.orchestrator import create_coordination_graph, create_fast_graph
 from state.manager import SessionManager
 from state.stop_flag import set_stop, clear_stop, is_stopped, cleanup_sid
@@ -943,7 +944,7 @@ async def _async_handle_review(sid: str, expected_session_id: str):
     review_prompt = build_review_prompt(user_message, state.current_base_response, state.review_language)
 
     # 直接调用 reviewer 节点函数（无需 LangGraph）
-    from agents.factory import get_llm
+    from agents.llm import get_llm
     from agents.prompts import get_reviewer_prompt
     from langchain_core.messages import SystemMessage
 

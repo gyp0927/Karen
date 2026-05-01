@@ -17,7 +17,7 @@ async def mock_tool_caller(state):
 
 async def benchmark_fast():
     from graph.orchestrator import create_fast_graph
-    from agents.factory import responder_node
+    from agents.nodes import responder_node
 
     graph = create_fast_graph(mock_web_searcher, mock_memory_searcher, mock_tool_caller, responder_node)
     state = {
@@ -41,7 +41,7 @@ async def benchmark_fast():
 
 async def benchmark_coordination():
     from graph.orchestrator import create_coordination_graph
-    from agents.factory import coordinator_node, researcher_node, responder_node
+    from agents.nodes import coordinator_node, researcher_node, responder_node
 
     graph = create_coordination_graph(coordinator_node, researcher_node, mock_tool_caller, responder_node)
     state = {

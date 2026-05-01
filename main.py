@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from agents.factory import create_agents
+from agents.nodes import create_agents
 from interface.human_interface import HumanInterface
 from state.manager import SessionManager
 

@@ -2,7 +2,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 
 from state.types import AgentState
-from agents.factory import _need_tool_call
+from agents.tools import _need_tool_call
 
 # 认知系统导入
 from cognition.intuition import get_intuition_engine
