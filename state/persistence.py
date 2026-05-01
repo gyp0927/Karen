@@ -21,18 +21,13 @@ _thread_local = threading.local()
 
 def _get_conn() -> sqlite3.Connection:
     """获取数据库连接（每个线程缓存一个连接）。"""
-    os.makedirs(_DB_DIR, exist_ok=True)
-    conn = getattr(_thread_local, "conn", None)
-    if conn is None:
-        conn = sqlite3.connect(_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        # SQLite 默认禁用外键约束，必须显式启用 ON DELETE CASCADE 才生效
-        conn.execute("PRAGMA foreign_keys = ON")
-        # 启用 WAL 模式提升并发性能
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        _thread_local.conn = conn
-    return conn
+    from core.db_utils import get_sqlite_conn
+    return get_sqlite_conn(
+        _DB_PATH,
+        enable_wal=True,
+        enable_foreign_keys=True,
+        use_thread_local=True,
+    )
 
 
 def init_db():

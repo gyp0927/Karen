@@ -1,22 +1,18 @@
-"""意图识别系统 - 混合架构（规则引擎 + 上下文感知 + 轻量 LLM）。
+"""意图识别系统 - 双层架构（规则引擎 + 上下文感知）。
 
-三层识别策略：
-1. 规则引擎（0ms）：正则/关键词匹配常见模式
+识别策略：
+1. 规则引擎（0ms）：正则/关键词匹配常见模式，覆盖 80% 场景
 2. 上下文感知（0ms）：结合历史消息判断澄清/追问
-3. LLM 分类器（~0.3s）：规则无法确定时，轻量模型兜底
 
 使用方式：
-    result = classify_intent("你好", history=[])
+    result = classify_intent_sync("你好", history=[])
     if result.skip_search:
         # 直接回复，跳过搜索
-    if result.intent == IntentType.CLARIFY:
-        # 沿用上一轮意图
 """
 
 import json
 import logging
 import re
-import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -286,204 +282,7 @@ def _infer_parent_intent(history: list[BaseMessage]) -> Optional[IntentResult]:
     return None
 
 
-# ========== 第三层：轻量 LLM 分类器 ==========
-
-_INTENT_LLM_PROMPT = """你是意图分类专家。分析用户消息，输出唯一意图标签。
-
-可选标签：
-- greeting: 问候/打招呼
-- factual: 事实查询（什么是/为什么/怎么/历史/最新）
-- coding: 代码/编程请求
-- creative: 创意写作（诗/故事/歌词）
-- math: 数学计算
-- translation: 翻译
-- comparison: 对比/区别
-- opinion: 观点/看法询问
-- chitchat: 闲聊/情感交流
-- thanks: 感谢
-- farewell: 告别
-- clarify: 澄清/追问
-- unknown: 不确定
-
-规则：
-- 只输出一个标签词，不要任何解释
-- 如果涉及知识查询选 factual
-- 如果是闲聊选 chitchat
-
-用户消息："{query}"
-意图标签："""
-
-# LLM 分类结果缓存（避免重复分类）
-_intent_llm_cache: dict[str, tuple[float, IntentResult]] = {}
-_intent_cache_lock = threading.Lock()
-_INTENT_CACHE_TTL = 600  # 10 分钟
-
-
-def _get_cached_intent_llm(query: str) -> Optional[IntentResult]:
-    import time
-    with _intent_cache_lock:
-        if query in _intent_llm_cache:
-            ts, result = _intent_llm_cache[query]
-            if time.time() - ts < _INTENT_CACHE_TTL:
-                return result
-        return None
-
-
-def _set_cached_intent_llm(query: str, result: IntentResult):
-    import time
-    with _intent_cache_lock:
-        _intent_llm_cache[query] = (time.time(), result)
-
-
-async def _llm_classify(query: str, sid: str = "") -> IntentResult:
-    """使用轻量 LLM 进行意图分类。
-
-    - 限制 max_tokens=10，确保快速返回
-    - 使用用户当前配置的模型（但可指定轻量模型）
-    - 超时 1.5 秒，超时则 fallback 到 unknown
-    """
-    import asyncio
-
-    # 检查缓存
-    cached = _get_cached_intent_llm(query)
-    if cached:
-        cached.source = "llm_cached"
-        return cached
-
-    try:
-        from agents.factory import get_llm
-        from langchain_core.messages import SystemMessage, HumanMessage
-
-        llm = get_llm(sid)
-        # 绑定极少 token，快速返回
-        llm = llm.bind(max_tokens=10, temperature=0.0)
-
-        prompt = _INTENT_LLM_PROMPT.format(query=query[:200])
-        messages = [
-            SystemMessage(content="You are an intent classifier. Output exactly one label word."),
-            HumanMessage(content=prompt),
-        ]
-
-        response = ""
-        async for chunk in llm.astream(messages):
-            if chunk.content:
-                response += chunk.content
-
-        raw = response.strip().lower()
-
-        # 映射到标准意图
-        intent_map = {
-            "greeting": IntentType.GREETING,
-            "factual": IntentType.FACTUAL,
-            "coding": IntentType.CODING,
-            "creative": IntentType.CREATIVE,
-            "math": IntentType.MATH,
-            "translation": IntentType.TRANSLATION,
-            "comparison": IntentType.COMPARISON,
-            "opinion": IntentType.OPINION,
-            "chitchat": IntentType.CHITCHAT,
-            "thanks": IntentType.THANKS,
-            "farewell": IntentType.FAREWELL,
-            "clarify": IntentType.CLARIFY,
-        }
-
-        for key, intent_val in intent_map.items():
-            if key in raw:
-                result = _intent_to_result(intent_val, source="llm")
-                _set_cached_intent_llm(query, result)
-                return result
-
-    except asyncio.TimeoutError:
-        logger.warning("Intent LLM classification timeout, fallback to unknown")
-    except Exception as e:
-        logger.warning(f"Intent LLM classification failed: {e}")
-
-    result = IntentResult(IntentType.UNKNOWN, confidence=0.3,
-                          skip_search=False, skip_memory=False,
-                          skip_knowledge=False, source="llm_fallback")
-    _set_cached_intent_llm(query, result)
-    return result
-
-
-def _intent_to_result(intent: str, source: str = "llm") -> IntentResult:
-    """将意图标签转换为完整的 IntentResult。"""
-    config = {
-        IntentType.GREETING:   {"skip_search": True,  "skip_memory": True,  "skip_knowledge": True},
-        IntentType.FAREWELL:   {"skip_search": True,  "skip_memory": True,  "skip_knowledge": True},
-        IntentType.THANKS:     {"skip_search": True,  "skip_memory": True,  "skip_knowledge": True},
-        IntentType.CHITCHAT:   {"skip_search": True,  "skip_memory": True,  "skip_knowledge": True},
-        IntentType.MATH:       {"skip_search": True,  "skip_memory": True,  "skip_knowledge": True},
-        IntentType.CODING:     {"skip_search": True,  "skip_memory": True,  "skip_knowledge": True, "use_coding_prompt": True},
-        IntentType.CREATIVE:   {"skip_search": True,  "skip_memory": True,  "skip_knowledge": True},
-        IntentType.TRANSLATION:{"skip_search": True,  "skip_memory": False, "skip_knowledge": True},
-        IntentType.OPINION:    {"skip_search": True,  "skip_memory": False, "skip_knowledge": True},
-        IntentType.FACTUAL:    {"skip_search": False, "skip_memory": False, "skip_knowledge": False},
-        IntentType.COMPARISON: {"skip_search": False, "skip_memory": False, "skip_knowledge": False},
-        IntentType.CLARIFY:    {"skip_search": True,  "skip_memory": True,  "skip_knowledge": True},
-        IntentType.UNKNOWN:    {"skip_search": False, "skip_memory": False, "skip_knowledge": False},
-    }
-    cfg = config.get(intent, {})
-    return IntentResult(
-        intent=intent,
-        confidence=0.70,
-        source=source,
-        **cfg,
-    )
-
-
 # ========== 主入口 ==========
-
-
-async def classify_intent(
-    query: str,
-    history: Optional[list[BaseMessage]] = None,
-    use_llm: bool = True,
-    sid: str = "",
-) -> IntentResult:
-    """三层混合意图识别主入口。
-
-    执行顺序：
-    1. 规则引擎（0ms，覆盖 80% 场景）
-    2. 上下文感知（0ms，处理多轮对话）
-    3. LLM 分类器（~0.3s，兜底模糊查询）
-
-    Args:
-        query: 用户输入文本
-        history: 历史消息列表（可选，用于上下文判断）
-        use_llm: 是否启用 LLM 兜底（默认开启）
-        sid: Socket ID（用于 LLM 配置隔离）
-
-    Returns:
-        IntentResult 包含意图类型和搜索策略
-    """
-    # 第一层：规则引擎
-    result = _rule_classify(query)
-    if result:
-        logger.debug(f"Intent [rule]: {result.intent} for '{query[:30]}...'")
-        return result
-
-    # 第二层：上下文感知
-    if history:
-        result = _context_classify(query, history)
-        if result:
-            logger.debug(f"Intent [context]: {result.intent} for '{query[:30]}...'")
-            return result
-
-    # 第三层：LLM 分类器
-    if use_llm:
-        result = await _llm_classify(query, sid)
-        logger.debug(f"Intent [llm]: {result.intent} for '{query[:30]}...'")
-        return result
-
-    # 全部未命中，保守策略（启用搜索）
-    return IntentResult(
-        IntentType.UNKNOWN,
-        confidence=0.3,
-        skip_search=False,
-        skip_memory=False,
-        skip_knowledge=False,
-        source="fallback",
-    )
 
 
 def classify_intent_sync(

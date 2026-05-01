@@ -12,8 +12,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # 尝试导入 numpy
-from core.vector_store.numpy_backend import HAS_NUMPY
-from core.vector_store.factory import get_vector_store
+from core.vector_store import HAS_NUMPY, get_vector_store
 
 if HAS_NUMPY:
     import numpy as np
@@ -192,7 +191,7 @@ def search_knowledge(query: str, top_k: int = 3) -> str:
 def get_knowledge_stats() -> dict[str, Any]:
     """获取知识库统计信息"""
     store = _get_store()
-    from core.vector_store.factory import list_backends, _get_backend_from_config
+    from core.vector_store import list_backends, _get_backend_from_config
     return {
         "total_chunks": store.count(),
         "enabled": HAS_NUMPY,

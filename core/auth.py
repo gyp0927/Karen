@@ -32,10 +32,8 @@ AUTH_ENABLED = os.getenv("ENABLE_AUTH", "false").lower() in ("true", "1", "yes")
 
 
 def _get_conn() -> sqlite3.Connection:
-    os.makedirs(_DB_DIR, exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    from core.db_utils import get_sqlite_conn
+    return get_sqlite_conn(_DB_PATH, enable_wal=False)
 
 
 def init_auth_db():

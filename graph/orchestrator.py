@@ -2,6 +2,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 
 from state.types import AgentState
+from agents.factory import _need_tool_call
 
 # 认知系统导入
 from cognition.intuition import get_intuition_engine
@@ -163,15 +164,6 @@ def create_fast_graph(web_searcher, memory_searcher, tool_caller, responder_agen
     async def tool_caller_node(state: AgentState) -> dict:
         return await tool_caller(state)
 
-    def _need_tool_call(query: str) -> bool:
-        """判断是否需要非搜索类工具调用（计算、代码等）。"""
-        q = query.lower()
-        if any(kw in q for kw in ["计算", "等于多少", "+", "*", "/", "平方", "次方", "百分比"]):
-            return True
-        if any(kw in q for kw in ["运行代码", "执行代码", "算一下", "验证"]):
-            return True
-        return False
-
     def _route_from_intent(
         state: AgentState,
         skip_search: bool,
@@ -271,5 +263,3 @@ def create_fast_graph(web_searcher, memory_searcher, tool_caller, responder_agen
     return workflow.compile()
 
 
-# 兼容旧代码的别名
-create_simple_responder_graph = create_fast_graph

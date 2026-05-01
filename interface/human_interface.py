@@ -1,5 +1,4 @@
 import logging
-import re
 from dataclasses import asdict
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph.state import CompiledStateGraph
@@ -7,6 +6,7 @@ from langgraph.graph.state import CompiledStateGraph
 from graph.orchestrator import create_coordination_graph, create_fast_graph
 from state.manager import SessionManager
 from core.model_router import get_router
+from core.utils import detect_language
 
 # 认知系统导入
 from cognition.human_mind import HumanMind
@@ -20,29 +20,6 @@ from agents.factory import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# 简单语言检测（复用 web/app.py 的逻辑，避免循环导入）
-def _detect_language(text: str) -> str:
-    if not text or not text.strip():
-        return "zh"
-    cleaned = re.sub(r"[\s\.\,\!\?\;\:\'\"\(\)\[\]\{\}\\/\-\_\@\#\$\%\&\*\+\=\|\<\>\`\~]", "", text)
-    if not cleaned:
-        return "zh"
-    zh_chars = len(re.findall(r"[一-鿿]", cleaned))
-    ja_chars = len(re.findall(r"[぀-ゟ゠-ヿ]", cleaned))
-    ko_chars = len(re.findall(r"[가-힯]", cleaned))
-    total = len(cleaned)
-    if total == 0:
-        return "zh"
-    scores = {"zh": zh_chars / total, "ja": ja_chars / total, "ko": ko_chars / total}
-    best_lang = max(scores, key=scores.get)
-    if scores[best_lang] > 0.25:
-        return best_lang
-    ascii_chars = sum(1 for c in cleaned if ord(c) < 128)
-    if ascii_chars / total > 0.6:
-        return "en"
-    return "zh"
 
 
 class HumanInterface:
@@ -94,7 +71,7 @@ class HumanInterface:
 
         # 自动语言检测（仅第一条用户消息）
         if self.detected_language is None:
-            self.detected_language = _detect_language(content)
+            self.detected_language = detect_language(content)
             logger.info(f"Auto-detected language: {self.detected_language}")
 
         self.messages.add_human_message(content)
@@ -138,7 +115,7 @@ class HumanInterface:
 
     async def _do_review(self, user_message: str, base_response: str) -> str:
         """执行审查流程"""
-        from prompts.reviewer_prompt import build_review_prompt
+        from agents.prompts import build_review_prompt
         review_prompt = build_review_prompt(user_message, base_response, self.review_language)
 
         review_state = {

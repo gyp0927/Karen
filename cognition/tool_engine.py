@@ -130,21 +130,6 @@ def get_available_tools() -> list[BaseTool]:
     return list(DEFAULT_TOOLS)
 
 
-def get_tools_for_mode(mode: str) -> list[BaseTool]:
-    """根据运行模式获取不重复的工具列表。
-
-    避免预搜索和 Responder 工具调用重复：
-    - fast 模式: 预搜了 web + memory，Responder 只需 knowledge + execute_python
-    - coordination 模式: 预搜了 web + memory + knowledge，Responder 只需 execute_python
-    - planning 模式: 同 fast 模式
-    """
-    if mode == "coordination":
-        # 协调模式 Researcher 已并行搜 web + memory + knowledge
-        return [execute_python]
-    # 快速/计划模式: web_searcher + memory_searcher 已并行搜索
-    return [knowledge_search, execute_python]
-
-
 async def execute_tool_call(tool_call: dict) -> str:
     """执行单个 tool_call 并返回结果字符串。
 
@@ -258,12 +243,3 @@ async def _stream_final_response(
             if on_token:
                 on_token(chunk.content)
     return response
-
-
-def get_tools_prompt() -> str:
-    """生成工具说明文本，用于注入到系统提示词中（备用方案）。"""
-    lines = ["\n【可用工具】"]
-    for t in DEFAULT_TOOLS:
-        lines.append(f"  - {t.name}: {t.description[:80]}...")
-    lines.append("\n你可以根据需要使用上述工具。")
-    return "\n".join(lines)

@@ -193,25 +193,6 @@ class HumanMind:
             }
         return self.intuition.route_decision(query, history_length)
 
-    def get_cognitive_insights(self, agent_name: str) -> str:
-        """获取认知系统洞察（用于调试/展示）"""
-        lines = [f"🧠 [{agent_name}] 认知状态"]
-
-        # 情感状态
-        if self.enable_emotion:
-            state = self.emotion.get_state(agent_name)
-            lines.append(f"  情绪: {state.mood.value} (信心{state.confidence:.0%})")
-
-        # 直觉
-        if self.enable_intuition:
-            lines.append("  直觉引擎: 活跃")
-
-        # 元认知
-        if self.enable_metacognition:
-            lines.append("  元认知: 启用")
-
-        return "\n".join(lines)
-
     def _merge_persona_into_prompt(self, base_prompt: str, persona_prompt: str) -> str:
         """将人格提示词合并到基础提示词中
 

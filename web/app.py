@@ -1,5 +1,4 @@
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -13,6 +12,9 @@ import tempfile
 import threading
 import time
 import traceback
+
+from core.utils import detect_language
+from core.i18n import LANG_NAMES, get_lang_instruction
 
 from flask import Flask, render_template, request, send_file
 from flask_socketio import SocketIO, emit
@@ -261,75 +263,7 @@ def restrict_local_only():
 
 
 # ===== 语言检测 =====
-
-def detect_language(text: str) -> str:
-    """检测文本的主要语言。返回 'zh', 'en', 'ja', 'ko' 等 ISO 代码。
-
-    基于字符集统计，无需额外依赖：
-    - 中日韩统一表意文字 (CJK) → zh
-    - 平假名/片假名 → ja
-    - 韩文音节 → ko
-    - 主要是 ASCII → en
-    - 否则默认 zh
-    """
-    if not text or not text.strip():
-        return "zh"
-
-    cleaned = re.sub(r"[\s\.\,\!\?\;\:\'\"\(\)\[\]\{\}\\/\-\_\@\#\$\%\&\*\+\=\|\<\>\`\~]", "", text)
-    if not cleaned:
-        return "zh"
-
-    zh_chars = len(re.findall(r"[一-鿿]", cleaned))
-    ja_chars = len(re.findall(r"[぀-ゟ゠-ヿ]", cleaned))
-    ko_chars = len(re.findall(r"[가-힯]", cleaned))
-    total = len(cleaned)
-
-    if total == 0:
-        return "zh"
-
-    scores = {
-        "zh": zh_chars / total,
-        "ja": ja_chars / total,
-        "ko": ko_chars / total,
-    }
-    best_lang = max(scores, key=scores.get)
-    if scores[best_lang] > 0.25:
-        return best_lang
-
-    ascii_chars = sum(1 for c in cleaned if ord(c) < 128)
-    if ascii_chars / total > 0.6:
-        return "en"
-
-    return "zh"
-
-
-_LANG_NAMES = {
-    "zh": "中文",
-    "en": "English",
-    "ja": "日本語",
-    "ko": "한국어",
-    "fr": "Français",
-    "de": "Deutsch",
-    "es": "Español",
-    "ru": "Русский",
-    "ar": "العربية",
-}
-
-
-def _lang_instruction(lang: str) -> str:
-    """根据语言代码生成 responder prompt 中的语言指令。"""
-    instructions = {
-        "zh": "\n\n重要：你必须用中文回答。",
-        "en": "\n\nIMPORTANT: You must respond entirely in English.",
-        "ja": "\n\n重要：あなたは日本語で回答しなければなりません。",
-        "ko": "\n\n중요: 한국어로 답변해야 합니다.",
-        "fr": "\n\nIMPORTANT: Vous devez répondre entièrement en français.",
-        "de": "\n\nWICHTIG: Sie müssen vollständig auf Deutsch antworten.",
-        "es": "\n\nIMPORTANTE: Debe responder completamente en español.",
-        "ru": "\n\nВАЖНО: Вы должны отвечать полностью на русском языке.",
-        "ar": "\n\nمهم: يجب أن ترد باللغة العربية بالكامل.",
-    }
-    return instructions.get(lang, instructions.get("en", ""))
+# detect_language, LANG_NAMES, get_lang_instruction 已从 core.utils 和 core.i18n 导入
 
 
 # ===== Socket 状态隔离 =====
@@ -1072,7 +1006,7 @@ def config_cache_api():
 def get_rag_backends_api():
     """获取可用的向量存储后端列表"""
     try:
-        from core.vector_store.factory import list_backends, _get_backend_from_config
+        from core.vector_store import list_backends, _get_backend_from_config
         return {
             "success": True,
             "backends": list_backends(),
@@ -1087,7 +1021,7 @@ def get_rag_backends_api():
 def set_rag_backend_api():
     """切换向量存储后端"""
     try:
-        from core.vector_store.factory import set_backend
+        from core.vector_store import set_backend
         from core.rag import reset_store
         data = request.get_json() or {}
         backend = data.get("backend", "numpy")
@@ -1786,12 +1720,12 @@ async def _async_handle_review(sid: str, expected_session_id: str):
     })
 
     # 构建审查提示
-    from prompts.reviewer_prompt import build_review_prompt
+    from agents.prompts import build_review_prompt
     review_prompt = build_review_prompt(user_message, state.current_base_response, state.review_language)
 
     # 直接调用 reviewer 节点函数（无需 LangGraph）
     from agents.factory import get_llm
-    from prompts.reviewer_prompt import get_reviewer_prompt
+    from agents.prompts import get_reviewer_prompt
     from langchain_core.messages import SystemMessage
 
     llm = get_llm(sid)
