@@ -121,6 +121,12 @@ def find_free_port(start=5000):
 
 def start_flask_server(port):
     """在后台线程启动 Flask 服务器"""
+    # 设置 CORS 白名单，包含实际使用的端口（避免 Socket.IO origin 被拒绝）
+    origin = f"http://127.0.0.1:{port}"
+    existing = os.getenv("CORS_ORIGINS", "")
+    if origin not in existing:
+        os.environ["CORS_ORIGINS"] = f"{existing},{origin}" if existing else origin
+
     sys.path.insert(0, app_dir)
     from web.app import app, init_agents
 

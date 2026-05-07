@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 # 注：这些符号在 app.py 模块初始化后可用，由于 Flask Blueprint 的延迟执行机制不会导致循环导入
 from web.app import _GENERATED_DIR, has_valid_config, init_agents
 from core.auth import auth_required
+from core.plugin_system import list_plugins
+from core.model_router import get_router
 
 # ===== HTTP Routes =====
 
