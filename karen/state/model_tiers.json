@@ -1,0 +1,23 @@
+{
+  "light": {
+    "provider": "kimi-code",
+    "model": "kimi-for-coding",
+    "apiKey": "sk-kimi-MnvYSqxdjWNe1RER1nH5LpAMx9N95oTeYIakfBbPhSI7nRabr7T2UmKbsgnxBX6M",
+    "baseUrl": "https://api.kimi.com/coding/v1",
+    "description": "轻量模型（简单问答）"
+  },
+  "default": {
+    "provider": "kimi-code",
+    "model": "kimi-for-coding",
+    "apiKey": "sk-kimi-MnvYSqxdjWNe1RER1nH5LpAMx9N95oTeYIakfBbPhSI7nRabr7T2UmKbsgnxBX6M",
+    "baseUrl": "https://api.kimi.com/coding/v1",
+    "description": "默认模型"
+  },
+  "powerful": {
+    "provider": "kimi-code",
+    "model": "kimi-for-coding",
+    "apiKey": "sk-kimi-MnvYSqxdjWNe1RER1nH5LpAMx9N95oTeYIakfBbPhSI7nRabr7T2UmKbsgnxBX6M",
+    "baseUrl": "https://api.kimi.com/coding/v1",
+    "description": "强力模型（复杂任务）"
+  }
+}

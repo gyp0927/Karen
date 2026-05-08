@@ -1,0 +1,36 @@
+# 环境变量和敏感配置
+.env
+.env.local
+*.key
+*.pem
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Claude 工作目录
+.claude/
+
+# 运行时数据
+data/
+state/*.db
+state/*.sqlite
+state/*.sqlite3
+state/model_configs.json
+
+# 构建产物
+build/
+dist/
+*.spec
+
+# 生成的文件
+web/generated_files/
+
+# 日志
+*.log
+
+# Windows 批处理文件
+*.bat

@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" id="hljs-theme">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=99">
+  <script>
+    (function() {
+      const theme = localStorage.getItem("theme") || "system";
+      if (theme === "system") {
+        const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+        document.documentElement.setAttribute("data-theme", prefersLight ? "light" : "dark");
+      } else {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-logo">凯伦</div>
+        <button class="new-chat-btn" id="newChatBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          新建对话
+        </button>
+      </div>
+
+      <!-- 3D Agent Status -->
+      <div class="agent-3d-panel" id="agent3dPanel">
+        <div class="agent-3d-title">智能体团队</div>
+        <div class="agent-3d-grid">
+          <div class="agent-3d-card" id="agent3d-coordinator" data-agent="coordinator">
+            <div class="agent-3d-inner">
+              <div class="agent-3d-front">
+                <div class="agent-3d-avatar">
+                  <svg class="waifu-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <linearGradient id="coordHair" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#c084fc"/>
+                        <stop offset="100%" style="stop-color:#7c3aed"/>
+                      </linearGradient>
+                      <linearGradient id="coordSkin" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#ffe4d6"/>
+                        <stop offset="100%" style="stop-color:#ffd5c0"/>
+                      </linearGradient>
+                    </defs>
+                    <circle cx="50" cy="50" r="40" fill="url(#coordHair)"/>
+                    <ellipse cx="50" cy="55" rx="28" ry="32" fill="url(#coordSkin)"/>
+                    <path d="M30 25 Q25 15 35 12 Q50 8 65 12 Q75 15 70 25 Q75 22 78 28 Q80 35 75 38" fill="url(#coordHair)" stroke="#6d28d9" stroke-width="1.5"/>
+                    <path d="M22 50 Q18 65 25 75" fill="none" stroke="url(#coordHair)" stroke-width="4" stroke-linecap="round"/>
+                    <path d="M78 50 Q82 65 75 75" fill="none" stroke="url(#coordHair)" stroke-width="4" stroke-linecap="round"/>
+                    <path d="M35 40 Q30 38 32 42" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M65 40 Q70 38 68 42" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="38" cy="48" r="3.5" fill="#4c1d95"/>
+                    <circle cx="62" cy="48" r="3.5" fill="#4c1d95"/>
+                    <circle cx="39" cy="47" r="1.2" fill="white"/>
+                    <circle cx="63" cy="47" r="1.2" fill="white"/>
+                    <path d="M48 55 Q50 57 52 55" fill="none" stroke="#c084fc" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M46 62 Q50 67 54 62" fill="none" stroke="#db2777" stroke-width="2" stroke-linecap="round"/>
+                    <ellipse cx="35" cy="58" rx="4" ry="2.5" fill="#fda4af" opacity="0.5"/>
+                    <ellipse cx="65" cy="58" rx="4" ry="2.5" fill="#fda4af" opacity="0.5"/>
+                    <circle cx="28" cy="35" r="2" fill="#fbbf24" opacity="0.7"/>
+                    <circle cx="72" cy="32" r="1.5" fill="#fbbf24" opacity="0.7"/>
+                  </svg>
+                </div>
+                <div class="agent-3d-name">调度器</div>
+                <div class="agent-3d-role">Coordinator</div>
+              </div>
+              <div class="agent-3d-back">
+                <div class="agent-3d-status-text">待命</div>
+                <div class="agent-3d-wave"></div>
+              </div>
+            </div>
+            <div class="agent-3d-glow"></div>
+          </div>
+          <div class="agent-3d-card" id="agent3d-researcher" data-agent="researcher">
+            <div class="agent-3d-inner">
+              <div class="agent-3d-front">
+                <div class="agent-3d-avatar">
+                  <svg class="waifu-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <linearGradient id="resHair" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#60a5fa"/>
+                        <stop offset="100%" style="stop-color:#2563eb"/>
+                      </linearGradient>
+                      <linearGradient id="resSkin" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#fef3c7"/>
+                        <stop offset="100%" style="stop-color:#fde68a"/>
+                      </linearGradient>
+                    </defs>
+                    <circle cx="50" cy="50" r="40" fill="url(#resHair)"/>
+                    <ellipse cx="50" cy="55" rx="28" ry="32" fill="url(#resSkin)"/>
+                    <path d="M28 30 Q25 20 35 15 Q50 10 65 15 Q75 20 72 30 Q70 35 68 38" fill="url(#resHair)" stroke="#1d4ed8" stroke-width="1.5"/>
+                    <path d="M20 55 Q15 70 22 80" fill="none" stroke="url(#resHair)" stroke-width="4" stroke-linecap="round"/>
+                    <path d="M80 55 Q85 70 78 80" fill="none" stroke="url(#resHair)" stroke-width="4" stroke-linecap="round"/>
+                    <rect x="30" y="38" width="40" height="14" rx="3" fill="none" stroke="#1e40af" stroke-width="2"/>
+                    <line x1="50" y1="38" x2="50" y2="52" stroke="#1e40af" stroke-width="2"/>
+                    <circle cx="40" cy="45" r="3" fill="#1e3a5f"/>
+                    <circle cx="60" cy="45" r="3" fill="#1e3a5f"/>
+                    <circle cx="41" cy="44" r="1" fill="white"/>
+                    <circle cx="61" cy="44" r="1" fill="white"/>
+                    <path d="M35 38 L32 33" stroke="#1e40af" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M65 38 L68 33" stroke="#1e40af" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M48 58 Q50 60 52 58" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M46 64 Q50 68 54 64" fill="none" stroke="#f472b6" stroke-width="2" stroke-linecap="round"/>
+                    <ellipse cx="35" cy="60" rx="4" ry="2.5" fill="#fda4af" opacity="0.4"/>
+                    <ellipse cx="65" cy="60" rx="4" ry="2.5" fill="#fda4af" opacity="0.4"/>
+                    <circle cx="25" cy="30" r="2" fill="#fbbf24" opacity="0.6"/>
+                  </svg>
+                </div>
+                <div class="agent-3d-name">研究员</div>
+                <div class="agent-3d-role">Researcher</div>
+              </div>
+              <div class="agent-3d-back">
+                <div class="agent-3d-status-text">待命</div>
+                <div class="agent-3d-wave"></div>
+              </div>
+            </div>
+            <div class="agent-3d-glow"></div>
+          </div>
+          <div class="agent-3d-card" id="agent3d-responder" data-agent="responder">
+            <div class="agent-3d-inner">
+              <div class="agent-3d-front">
+                <div class="agent-3d-avatar">
+                  <svg class="waifu-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <linearGradient id="respHair" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#86efac"/>
+                        <stop offset="100%" style="stop-color:#16a34a"/>
+                      </linearGradient>
+                      <linearGradient id="respSkin" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#fff1f2"/>
+                        <stop offset="100%" style="stop-color:#ffe4e6"/>
+                      </linearGradient>
+                    </defs>
+                    <circle cx="50" cy="50" r="40" fill="url(#respHair)"/>
+                    <ellipse cx="50" cy="55" rx="28" ry="32" fill="url(#respSkin)"/>
+                    <path d="M30 22 Q28 12 40 10 Q50 8 60 10 Q72 12 70 22 Q68 30 65 35" fill="url(#respHair)" stroke="#15803d" stroke-width="1.5"/>
+                    <path d="M22 48 Q18 38 24 30" fill="none" stroke="url(#respHair)" stroke-width="4" stroke-linecap="round"/>
+                    <path d="M78 48 Q82 38 76 30" fill="none" stroke="url(#respHair)" stroke-width="4" stroke-linecap="round"/>
+                    <path d="M32 35 Q28 28 35 25" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M68 35 Q72 28 65 25" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="38" cy="48" r="3.5" fill="#166534"/>
+                    <circle cx="62" cy="48" r="3.5" fill="#166534"/>
+                    <circle cx="39" cy="47" r="1.2" fill="white"/>
+                    <circle cx="63" cy="47" r="1.2" fill="white"/>
+                    <path d="M35 44 Q38 42 40 44" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M60 44 Q63 42 65 44" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M47 56 Q50 61 53 56" fill="none" stroke="#db2777" stroke-width="2.5" stroke-linecap="round"/>
+                    <ellipse cx="34" cy="58" rx="4" ry="2.5" fill="#fda4af" opacity="0.5"/>
+                    <ellipse cx="66" cy="58" rx="4" ry="2.5" fill="#fda4af" opacity="0.5"/>
+                    <path d="M25 70 Q30 72 32 68" fill="none" stroke="#86efac" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="75" cy="28" r="1.5" fill="#fbbf24" opacity="0.7"/>
+                  </svg>
+                </div>
+                <div class="agent-3d-name">响应器</div>
+                <div class="agent-3d-role">Responder</div>
+              </div>
+              <div class="agent-3d-back">
+                <div class="agent-3d-status-text">待命</div>
+                <div class="agent-3d-wave"></div>
+              </div>
+            </div>
+            <div class="agent-3d-glow"></div>
+          </div>
+          <div class="agent-3d-card" id="agent3d-reviewer" data-agent="reviewer">
+            <div class="agent-3d-inner">
+              <div class="agent-3d-front">
+                <div class="agent-3d-avatar">
+                  <svg class="waifu-avatar" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <linearGradient id="revHair" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#fbbf24"/>
+                        <stop offset="50%" style="stop-color:#f59e0b"/>
+                        <stop offset="100%" style="stop-color:#d97706"/>
+                      </linearGradient>
+                      <linearGradient id="revSkin" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#fff7ed"/>
+                        <stop offset="100%" style="stop-color:#ffedd5"/>
+                      </linearGradient>
+                    </defs>
+                    <circle cx="50" cy="50" r="40" fill="url(#revHair)"/>
+                    <ellipse cx="50" cy="55" rx="28" ry="32" fill="url(#revSkin)"/>
+                    <path d="M25 28 Q22 15 35 12 Q50 8 65 12 Q78 15 75 28 Q73 35 70 38" fill="url(#revHair)" stroke="#b45309" stroke-width="1.5"/>
+                    <path d="M18 55 Q12 70 20 82" fill="none" stroke="url(#revHair)" stroke-width="4" stroke-linecap="round"/>
+                    <path d="M82 55 Q88 70 80 82" fill="none" stroke="url(#revHair)" stroke-width="4" stroke-linecap="round"/>
+                    <path d="M35 40 Q30 39 33 43" fill="none" stroke="#b45309" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M65 40 Q70 39 67 43" fill="none" stroke="#b45309" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="38" cy="48" r="3.5" fill="#78350f"/>
+                    <circle cx="62" cy="48" r="3.5" fill="#78350f"/>
+                    <circle cx="39" cy="47" r="1.2" fill="white"/>
+                    <circle cx="63" cy="47" r="1.2" fill="white"/>
+                    <path d="M36 43 Q38 41 40 43" fill="none" stroke="#b45309" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M60 43 Q62 41 64 43" fill="none" stroke="#b45309" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M48 56 L50 58 L52 56" fill="none" stroke="#d97706" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M46 62 Q50 65 54 62" fill="none" stroke="#db2777" stroke-width="1.8" stroke-linecap="round"/>
+                    <ellipse cx="35" cy="58" rx="4" ry="2.5" fill="#fda4af" opacity="0.4"/>
+                    <ellipse cx="65" cy="58" rx="4" ry="2.5" fill="#fda4af" opacity="0.4"/>
+                    <circle cx="30" cy="25" r="1.5" fill="#fbbf24" opacity="0.8"/>
+                    <circle cx="70" cy="28" r="2" fill="#fbbf24" opacity="0.8"/>
+                    <path d="M72 70 Q75 72 78 70" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                </div>
+                <div class="agent-3d-name">审查者</div>
+                <div class="agent-3d-role">Reviewer</div>
+              </div>
+              <div class="agent-3d-back">
+                <div class="agent-3d-status-text">待命</div>
+                <div class="agent-3d-wave"></div>
+              </div>
+            </div>
+            <div class="agent-3d-glow"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-history" id="sidebarHistory">
+        <!-- 动态生成历史对话列表 -->
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="sidebar-item" id="extensionsBtn" title="扩展与管理">
+          <span class="sidebar-icon">🧩</span>
+          <span class="sidebar-text">管理</span>
+        </button>
+        <button class="sidebar-item" id="themeToggleBtn" title="切换主题">
+          <span class="sidebar-icon" id="themeIcon">💻</span>
+          <span class="sidebar-text">主题</span>
+        </button>
+        <div class="sidebar-item" id="modelSwitcherBtn" style="cursor: pointer;" title="点击切换模型">
+          <span class="sidebar-icon">🤖</span>
+          <span class="sidebar-text" id="currentModelText">加载中...</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Mobile toggle -->
+    <button class="sidebar-toggle" id="sidebarToggle">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="3" y1="12" x2="21" y2="12"></line>
+        <line x1="3" y1="6" x2="21" y2="6"></line>
+        <line x1="3" y1="18" x2="21" y2="18"></line>
+      </svg>
+    </button>
+
+    <!-- Overlay for mobile -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- Chat Area -->
+    <div class="chat-area" id="chatArea">
+      <div class="chat-main" id="chatMain">
+        <!-- Empty State -->
+        <div class="empty-state" id="emptyState">
+          <div class="empty-content">
+            <h1 class="empty-title">我是凯伦，你想问什么？</h1>
+          </div>
+        </div>
+
+        <!-- Messages Area -->
+        <div class="messages" id="chatMessages" style="display: none;"></div>
+      </div>
+
+      <!-- Input Area -->
+      <div class="input-area">
+        <div class="input-wrapper">
+          <div class="input-box">
+            <div class="input-tools">
+              <button class="tool-btn with-label" id="uploadBtn" title="上传文件">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <span class="tool-label">上传</span>
+              </button>
+              <input type="file" id="fileInput" style="display: none;" accept=".pdf,.docx,.doc,.txt,.md,.py,.js,.html,.css,.json,.xml,.yaml,.yml">
+              <button class="tool-btn with-label" id="inputModeBtn" title="切换模式">
+                <span id="inputModeIcon">🐇</span>
+                <span class="tool-label" id="inputModeLabel">协调</span>
+              </button>
+            </div>
+            <div class="file-attachment" id="fileAttachment" style="display: none;">
+              <span class="file-attachment-icon">📎</span>
+              <span class="file-attachment-name" id="fileAttachmentName"></span>
+              <button class="file-attachment-remove" id="fileAttachmentRemove" title="移除文件"></button>
+            </div>
+            <textarea
+              class="chat-input"
+              id="chatInput"
+              placeholder="发送消息..."
+              rows="1"
+              oninput="autoResize(this)"
+            ></textarea>
+            <button class="send-btn" id="sendBtn" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+            <button class="stop-btn" id="stopBtn" style="display: none;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+              </svg>
+            </button>
+          </div>
+          <div class="review-bar" id="reviewBar" style="display: none;">
+            <span class="review-bar-text">回答已生成，需要审查吗？</span>
+            <button class="review-bar-btn" id="reviewBarBtn">🔍 审查回答</button>
+          </div>
+          <div class="input-hint" id="inputHint">
+            <span id="modelHint">加载中...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Preview Panel (right side) -->
+    <aside class="preview-panel" id="previewPanel">
+      <div class="preview-panel-header">
+        <span>&#127760; 代码预览</span>
+        <div class="preview-panel-actions">
+          <button class="preview-panel-dl" id="previewPanelDl" title="下载 HTML">&#128190; 下载</button>
+          <button class="preview-panel-close" id="previewPanelClose">&#10005;</button>
+        </div>
+      </div>
+      <div class="preview-panel-frame-wrap">
+        <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin"></iframe>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Model Switcher Modal -->
+  <div class="model-switcher-overlay" id="modelSwitcherOverlay" style="display: none;">
+    <div class="model-switcher-box">
+      <div class="model-switcher-header">
+        <span class="model-switcher-title">&#128268; 切换模型</span>
+        <button class="model-switcher-close" id="modelSwitcherClose">&#10005;</button>
+      </div>
+      <div class="model-switcher-list" id="modelSwitcherList">
+        <!-- Config items rendered here -->
+      </div>
+      <a href="/config" class="model-switcher-manage">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"></path>
+        </svg>
+        管理模型配置
+      </a>
+    </div>
+  </div>
+
+  <!-- User Config Dialog (for LAN guests to set their own API Key) -->
+  <div class="config-prompt-overlay" id="userConfigOverlay" style="display: none;">
+    <div class="config-prompt-box" style="max-width: 420px; text-align: left;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <div class="config-prompt-icon">&#9881;&#65039;</div>
+        <div class="config-prompt-title">配置你的 AI 模型</div>
+        <div class="config-prompt-desc">输入你自己的 API Key，数据仅保存在当前浏览器</div>
+      </div>
+      <div class="user-cfg-form">
+        <div class="user-cfg-group">
+          <label class="user-cfg-label">提供商</label>
+          <select class="user-cfg-select" id="userCfgProvider">
+            <option value="deepseek">DeepSeek</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="qwen">阿里 Qwen</option>
+            <option value="kimi">月之暗面 Kimi</option>
+            <option value="glm">智谱 GLM</option>
+            <option value="ollama">Ollama (本地)</option>
+            <option value="grok">xAI Grok</option>
+            <option value="mistral">Mistral AI</option>
+            <option value="groq">Groq</option>
+            <option value="azure">Azure OpenAI</option>
+          </select>
+        </div>
+        <div class="user-cfg-group">
+          <label class="user-cfg-label">模型名称</label>
+          <input type="text" class="user-cfg-input" id="userCfgModel" placeholder="例如：deepseek-chat">
+          <div class="user-cfg-hint" id="userCfgModelHint">&#128161; 常见模型：deepseek-chat, gpt-4o, claude-sonnet-4</div>
+        </div>
+        <div class="user-cfg-group">
+          <label class="user-cfg-label">API Key</label>
+          <div style="position: relative;">
+            <input type="password" class="user-cfg-input" id="userCfgApiKey" placeholder="输入你的 API Key">
+            <button class="user-cfg-toggle" id="userCfgToggleKey" type="button">&#128065;</button>
+          </div>
+          <div class="user-cfg-hint" id="userCfgKeyHint">&#128272; 仅保存在本地浏览器，不会上传到服务器</div>
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 20px;">
+          <button class="config-prompt-btn secondary" id="userCfgCancel" style="flex: 1;">取消</button>
+          <button class="config-prompt-btn primary" id="userCfgSave" style="flex: 1;">&#128190; 保存并开始</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Extensions Panel -->
+  <div class="config-prompt-overlay" id="extensionsOverlay" style="display: none;">
+    <div class="config-prompt-box" style="max-width: 520px; text-align: left; max-height: 80vh; overflow-y: auto;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <div class="config-prompt-icon">🧩</div>
+        <div class="config-prompt-title">扩展功能</div>
+      </div>
+      <div id="extensionsContent">
+        <div style="text-align:center; color: var(--text-secondary);">加载中...</div>
+      </div>
+      <div style="display: flex; gap: 10px; margin-top: 20px;">
+        <button class="config-prompt-btn secondary" id="extensionsClose" style="flex: 1;">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="{{ url_for('static', filename='script.js') }}?v=12"></script>
+</body>
+</html>
