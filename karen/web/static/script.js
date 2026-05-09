@@ -43,10 +43,8 @@ let messageCount = 0;
 let currentTheme = localStorage.getItem("theme") || "system";
 let sessions = [];
 let currentSessionId = "";
-let currentMode = "coordination"; // "coordination" | "fast" | "planning"
-let fastMode = false;
-let planningMode = false;
-let currentPlan = null;  // { title, steps[] }
+let currentMode = "fast";
+let fastMode = true;
 let attachedFile = null; // { filename, content }
 let userConfig = null;   // { provider, model, apiKey, name } LAN 用户的本地配置
 
@@ -496,20 +494,9 @@ if (themeToggleBtn) {
   });
 }
 
+// 隐藏模式切换按钮（只保留快速模式）
 if (inputModeBtn) {
-  inputModeBtn.addEventListener("click", () => {
-    // 循环切换：协调 -> 快速 -> 计划 -> 协调
-    if (currentMode === "coordination") {
-      currentMode = "fast";
-      socket.emit("set_mode", { mode: "fast" });
-    } else if (currentMode === "fast") {
-      currentMode = "planning";
-      socket.emit("set_mode", { mode: "planning" });
-    } else {
-      currentMode = "coordination";
-      socket.emit("set_mode", { mode: "coordination" });
-    }
-  });
+  inputModeBtn.style.display = "none";
 }
 
 // File upload
@@ -563,114 +550,11 @@ if (fileAttachmentRemove) {
   });
 }
 
-const MODE_CONFIG = {
-  coordination: { icon: "🐇", label: "协调", tooltip: "协调模式" },
-  fast:         { icon: "🚀", label: "快速", tooltip: "快速模式" },
-  planning:     { icon: "📋", label: "计划", tooltip: "计划模式" },
-};
-
+// 模式固定为快速模式，UI 不显示切换按钮
 function updateModeUI(mode) {
-  currentMode = mode;
-  fastMode = mode === "fast";
-  planningMode = mode === "planning";
-
-  const cfg = MODE_CONFIG[mode] || MODE_CONFIG.coordination;
-  if (inputModeBtn) {
-    inputModeBtn.title = cfg.tooltip;
-    inputModeBtn.classList.toggle("active", mode !== "coordination");
-  }
-  if (inputModeIcon) inputModeIcon.textContent = cfg.icon;
-  if (inputModeLabel) inputModeLabel.textContent = cfg.label;
+  currentMode = "fast";
+  fastMode = true;
 }
-
-// ============ Planning Mode UI ============
-
-function renderPlanCard(title, steps) {
-  if (!chatMessages) return;
-  emptyState.style.display = "none";
-  chatMessages.style.display = "block";
-
-  const planId = "plan-" + Date.now();
-  const stepsHtml = steps.map((step, idx) => {
-    return `
-      <div class="plan-step" data-step-index="${idx}" id="${planId}-step-${idx}">
-        <div class="plan-step-check"></div>
-        <div class="plan-step-content">
-          <div class="plan-step-title">${idx + 1}. ${escapeHtml(step.title)}</div>
-          <div class="plan-step-desc">${escapeHtml(step.description || "")}</div>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  const html = `
-    <div class="message assistant" id="${planId}">
-      <div class="message-avatar">📋</div>
-      <div class="message-content">
-        <div class="plan-card">
-          <div class="plan-header">📋 任务计划：${escapeHtml(title)}</div>
-          <div class="plan-steps" id="${planId}-steps">
-            ${stepsHtml}
-          </div>
-          <div class="plan-actions">
-            <button class="plan-start-btn" id="${planId}-start" onclick="startPlanExecution('${planId}')">▶️ 开始执行</button>
-            <button class="plan-cancel-btn" onclick="cancelPlan()">❌ 取消</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  chatMessages.insertAdjacentHTML("beforeend", html);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-  messageCount++;
-}
-
-function updatePlanStepStatus(stepIndex, status) {
-  const stepEl = document.querySelector(`.plan-step[data-step-index="${stepIndex}"]`);
-  if (!stepEl) return;
-
-  const checkEl = stepEl.querySelector(".plan-step-check");
-  if (!checkEl) return;
-
-  stepEl.classList.remove("active", "completed", "skipped");
-  stepEl.classList.add(status);
-
-  if (status === "active") {
-    checkEl.textContent = "⏳";
-  } else if (status === "completed") {
-    checkEl.textContent = "✅";
-  } else if (status === "skipped") {
-    checkEl.textContent = "⏭️";
-  } else {
-    checkEl.textContent = "⬜";
-  }
-}
-
-function appendPlanStepResult(stepIndex, stepTitle, result) {
-  if (!chatMessages) return;
-
-  const content = `**步骤 ${stepIndex + 1}：${stepTitle}**\n\n${result}`;
-  appendMessage(content, "assistant", "Planner", false);
-}
-
-function appendPlanSummary(title, totalSteps) {
-  if (!chatMessages) return;
-
-  const summary = `🎉 **计划「${title}」全部完成！**\n\n共完成 ${totalSteps} 个步骤。`;
-  appendMessage(summary, "assistant", "Planner", false);
-}
-
-// 全局函数（供 onclick 调用）
-window.startPlanExecution = function(planId) {
-  const steps = currentPlan ? currentPlan.steps : [];
-  socket.emit("confirm_plan", { plan: { title: currentPlan.title, steps: steps } });
-};
-
-window.cancelPlan = function() {
-  socket.emit("cancel_plan");
-  currentPlan = null;
-};
 
 // ============ Session Management ============
 
@@ -757,23 +641,6 @@ socket.on("connect_error", (err) => {
 socket.on("thinking", (data) => {
   showThinking(data.message);
 });
-
-socket.on("agent_start", (data) => {
-  updateAgentStatusUI(data.agent, data.message, true);
-});
-
-socket.on("agent_finish", (data) => {
-  updateAgentStatusUI(data.agent, "待命", false);
-});
-
-function updateAgentStatusUI(agent, text, active) {
-  const card = document.getElementById("agent3d-" + agent);
-  if (!card) return;
-  const textEl = card.querySelector(".agent-3d-status-text");
-  if (textEl) textEl.textContent = text;
-  card.classList.toggle("working", active);
-  card.classList.toggle("idle", !active);
-}
 
 socket.on("user_message", (data) => {
   appendMessage(data.message, "user", "你");
@@ -897,7 +764,6 @@ socket.on("review_complete", (data) => {
   sendBtn.style.display = "flex";
   sendBtn.disabled = !chatInput.value.trim();
   if (stopBtn) stopBtn.style.display = "none";
-  updateAgentStatusUI("reviewer", "待命", false);
 });
 
 socket.on("message_failed", (data) => {
@@ -918,9 +784,6 @@ socket.on("message_failed", (data) => {
   sendBtn.disabled = !chatInput.value.trim();
   if (stopBtn) stopBtn.style.display = "none";
   clearThinking();
-  ["coordinator", "researcher", "responder", "reviewer"].forEach(agent => {
-    updateAgentStatusUI(agent, "待命", false);
-  });
 });
 
 socket.on("error", (data) => {
@@ -930,10 +793,6 @@ socket.on("error", (data) => {
   sendBtn.disabled = !chatInput.value.trim();
   if (stopBtn) stopBtn.style.display = "none";
   clearThinking();
-  // Reset all agents to idle on error
-  ["coordinator", "researcher", "responder", "reviewer"].forEach(agent => {
-    updateAgentStatusUI(agent, "待命", false);
-  });
 });
 
 // Session events
@@ -1017,15 +876,6 @@ socket.on("config_error", (data) => {
   showUserConfigDialog(true);
 });
 
-socket.on("mode_changed", (data) => {
-  updateModeUI(data.mode);
-  showToast(data.message, "info");
-});
-
-socket.on("mode_status", (data) => {
-  updateModeUI(data.mode);
-});
-
 socket.on("config_required", (data) => {
   resetToIdle();
   // 如果本地有用户配置，重新发送给后端
@@ -1079,70 +929,6 @@ socket.on("generation_stopping", (data) => {
   showToast("正在停止...", "info");
 });
 
-// ============ Planning Mode Events ============
-
-socket.on("plan_generated", (data) => {
-  isProcessing = false;
-  resetToIdle();
-  currentPlan = { title: data.title, steps: data.steps };
-  renderPlanCard(data.title, data.steps);
-  showToast(data.message, "success");
-});
-
-socket.on("plan_step_started", (data) => {
-  updatePlanStepStatus(data.step_index, "active");
-  showToast(data.message, "info");
-});
-
-socket.on("plan_step_result", (data) => {
-  // 步骤结果会作为普通消息显示
-  isProcessing = false;
-  resetToIdle();
-});
-
-socket.on("plan_step_completed", (data) => {
-  updatePlanStepStatus(data.step_index, "completed");
-  // 将结果添加到消息区域
-  appendPlanStepResult(data.step_index, data.step_title, data.result);
-  showToast(data.message, "success");
-});
-
-socket.on("plan_step_error", (data) => {
-  isProcessing = false;
-  resetToIdle();
-  showToast(data.message, "error");
-});
-
-socket.on("plan_step_skipped", (data) => {
-  updatePlanStepStatus(data.step_index, "skipped");
-  showToast(data.message, "info");
-});
-
-socket.on("plan_completed", (data) => {
-  isProcessing = false;
-  resetToIdle();
-  currentPlan = null;
-  appendPlanSummary(data.title, data.total_steps);
-  showToast(data.message, "success");
-});
-
-socket.on("plan_cancelled", (data) => {
-  isProcessing = false;
-  resetToIdle();
-  currentPlan = null;
-  showToast(data.message, "info");
-});
-
-socket.on("plan_confirmed", (data) => {
-  showToast(data.message, "success");
-  // 禁用计划卡片中的按钮，防止重复点击
-  const startBtn = document.querySelector(".plan-start-btn");
-  if (startBtn) {
-    startBtn.disabled = true;
-    startBtn.textContent = "执行中...";
-  }
-});
-
 // ============ Event Handlers ============
 
 function sendMessage() {
@@ -1179,9 +965,6 @@ function resetToIdle() {
   sendBtn.disabled = true;
   if (stopBtn) stopBtn.style.display = "none";
   clearThinking();
-  ["coordinator", "researcher", "responder", "reviewer"].forEach(agent => {
-    updateAgentStatusUI(agent, "待命", false);
-  });
 }
 
 if (reviewBarBtn) {
@@ -1622,10 +1405,7 @@ if (extensionsOverlay) {
 
 // ============ Init ============
 
-// Initialize all agents as idle
-["coordinator", "researcher", "responder", "reviewer"].forEach(agent => {
-  updateAgentStatusUI(agent, "待命", false);
-});
+// Fast mode only — no mode toggle, no agent panel
 
 loadUserConfig();
 socket.emit("get_model_info");

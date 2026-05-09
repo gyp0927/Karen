@@ -26,10 +26,10 @@ from agents.llm import (
     set_current_llm_config, set_streaming_callback,
     clear_streaming_callback, clear_llm_cache, get_llm,
 )
-from agents.nodes import create_agents, planner_node, parse_plan_from_response
+from agents.nodes import create_agents
 from agents.search import web_searcher_agent, memory_searcher_agent
 from agents.tools import tool_caller_node
-from graph.orchestrator import create_coordination_graph, create_fast_graph
+from graph.orchestrator import create_fast_graph
 from state.manager import SessionManager
 from state.stop_flag import set_stop, clear_stop, is_stopped, cleanup_sid
 from state.model_config_manager import (
@@ -317,11 +317,6 @@ class SocketState:
         self.fast_mode = True
         self.review_language = "zh"
         self.detected_language: str | None = None  # 自动检测的用户语言（仅第一条消息）
-        # 计划模式状态
-        self.planning_mode = False
-        self.current_plan: dict | None = None  # { title, steps[] }
-        self.current_step_index: int = 0
-        self.plan_results: dict[int, str] = {}  # step_index -> result
         self.last_active = time.time()  # 最后活跃时间戳
 
     def touch(self):
@@ -337,16 +332,13 @@ class SocketState:
     def reset_session(self):
         """切/新/删会话时重置 per-socket 瞬态字段。
 
-        否则 detected_language/current_plan/plan_results 会从前一会话沿用,
+        否则 detected_language 会从前一会话沿用,
         流式回调也可能继续把 token_chunk 打到新会话。
         """
         set_stop(self.sid)
         clear_streaming_callback(self.sid)
         self.current_base_response = None
         self.detected_language = None
-        self.current_plan = None
-        self.current_step_index = 0
-        self.plan_results = {}
 
 
 # 按 socket sid 存储的隔离状态
@@ -358,8 +350,7 @@ socket_configs = {}
 _socket_configs_lock = threading.Lock()
 
 # 全局预编译的图（图本身不区分 socket，Agent 函数通过 sid 获取配置）
-coordination_graph = None   # coordinator -> researcher(optional) -> responder
-fast_graph = None           # 快速模式：直接 responder
+fast_graph = None           # 快速模式：并行搜索 → Responder
 
 
 def get_socket_state(sid: str) -> SocketState:
@@ -430,7 +421,7 @@ def init_agents():
     Graph 是无状态的(运行时通过 sid 取 LLM 配置),memory store 自带
     `_initialized` 守卫;重复 init 等于浪费 30s embedder 预热。
     """
-    global coordination_graph, fast_graph, _agents_initialized
+    global fast_graph, _agents_initialized
 
     # double-checked: 已初始化时跳过 lock,避免每次连接都进 contended path
     if _agents_initialized:
@@ -440,10 +431,8 @@ def init_agents():
         if _agents_initialized:
             return
 
-        # 始终编译两种图，运行时根据 socket 的 fast_mode 选择
-        coordinator, researcher, responder, reviewer = create_agents(language="zh", fast_mode=False)
-        coordination_graph = create_coordination_graph(coordinator, researcher, tool_caller_node, responder)
-        # 快速模式：并行 WebSearcher + MemorySearcher + ToolCaller → Responder
+        # 只编译快速模式图：并行 WebSearcher + MemorySearcher + ToolCaller → Responder
+        _, _, responder, _ = create_agents(language="zh", fast_mode=True)
         fast_graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder)
 
         logger.info("Agent graphs initialized")
@@ -666,14 +655,9 @@ def handle_message(data):
     state.msg_manager.add_human_message(user_message)
 
     try:
-        if state.planning_mode:
-            run_async_in_thread(_async_handle_planning(
-                sid, user_message, expected_session_id
-            ))
-        else:
-            run_async_in_thread(_async_handle_message(
-                sid, user_message, document_context, expected_session_id
-            ))
+        run_async_in_thread(_async_handle_message(
+            sid, user_message, document_context, expected_session_id
+        ))
     except Exception as e:
         logger.exception(f"Error handling message from sid={sid}")
         emit("error", {"message": str(e)})
@@ -682,19 +666,12 @@ def handle_message(data):
         clear_streaming_callback(sid)
 
 
-def _emit_agent_reset(fast_mode: bool, sid: str = ""):
+def _emit_agent_reset(sid: str = ""):
     """发送 Agent 空闲状态到前端"""
     try:
-        if fast_mode:
-            # 快速/计划模式：并行 WebSearcher + MemorySearcher → Responder
-            socketio.emit("agent_finish", {"agent": "web_searcher", "message": "空闲"}, room=sid)
-            socketio.emit("agent_finish", {"agent": "memory_searcher", "message": "空闲"}, room=sid)
-            socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
-        else:
-            # 协调模式：Coordinator → Researcher → Responder
-            socketio.emit("agent_finish", {"agent": "coordinator", "message": "空闲"}, room=sid)
-            socketio.emit("agent_finish", {"agent": "researcher", "message": "空闲"}, room=sid)
-            socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
+        socketio.emit("agent_finish", {"agent": "web_searcher", "message": "空闲"}, room=sid)
+        socketio.emit("agent_finish", {"agent": "memory_searcher", "message": "空闲"}, room=sid)
+        socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
     except Exception:
         pass
 
@@ -796,8 +773,8 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 传给 LLM 的消息列表（历史 + 当前）
     messages_for_llm = messages + [current_msg]
 
-    # 确定当前模式，供 Researcher 节点内的搜索子 Agent 使用
-    current_mode = "planning" if state.planning_mode else ("fast" if state.fast_mode else "coordination")
+    # 当前模式固定为快速模式
+    current_mode = "fast"
 
     initial_state = {
         "messages": messages_for_llm,
@@ -816,8 +793,8 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         "awaiting_review": True
     }
 
-    # 根据 socket 的 fast_mode 选择图
-    graph = fast_graph if state.fast_mode else coordination_graph
+    # 始终使用快速模式图
+    graph = fast_graph
 
     # 安全 emit：后台线程中请求上下文可能丢失，使用 socketio.emit 代替
     def _safe_emit(event, data):
@@ -847,12 +824,6 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     _safe_emit("stream_start", {"agent": "responder"})
     _safe_emit("token_chunk", {"token": "🔍 正在搜索相关信息，请稍候..."})
     _stream_started = True  # 标记已启动，防止 LLM 回调重复发送 stream_start
-
-    # 根据模式显示不同的思考状态提示（会持续更新）
-    if state.fast_mode:
-        _safe_emit("thinking", {"message": "正在分析需求..."})
-    else:
-        _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
 
     final_state = None
     call_start = time.time()
@@ -890,7 +861,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     except Exception as e:
         logger.exception(f"Error processing message for sid={sid}")
         clear_streaming_callback(sid)
-        _emit_agent_reset(state.fast_mode, sid)
+        _emit_agent_reset(sid)
         clear_stop(sid)
         # 如果流式气泡已创建，发送 stream_end 清理占位符
         if _stream_started:
@@ -1310,38 +1281,24 @@ def handle_stop_generation():
 
 
 def _get_mode(state: SocketState) -> str:
-    """根据 fast_mode 和 planning_mode 返回统一的模式名称"""
-    if state.planning_mode:
-        return "planning"
-    if state.fast_mode:
-        return "fast"
-    return "coordination"
+    """返回模式名称（固定为快速模式）"""
+    return "fast"
 
 
 @socketio.on("set_mode")
 @socketio_auth_required
 def handle_set_mode(data):
-    """统一切换工作模式：协调 / 快速 / 计划"""
+    """模式切换（固定为快速模式，忽略其他模式请求）"""
     sid = request.sid
     state = get_socket_state(sid)
-    mode = data.get("mode", "coordination")
+    mode = data.get("mode", "fast")
 
-    if mode == "fast":
-        state.fast_mode = True
-        state.planning_mode = False
-        mode_name = "快速模式"
-    elif mode == "planning":
-        state.fast_mode = False
-        state.planning_mode = True
-        mode_name = "计划模式"
-    else:
-        state.fast_mode = False
-        state.planning_mode = False
-        mode_name = "协调模式"
+    state.fast_mode = True
+    mode_name = "快速模式"
 
-    logger.info(f"Mode changed to {mode} for sid={sid}")
+    logger.info(f"Mode set to fast for sid={sid} (requested: {mode})")
     emit("mode_changed", {
-        "mode": mode,
+        "mode": "fast",
         "message": f"已切换到{mode_name}"
     })
 
@@ -1417,315 +1374,6 @@ def handle_set_user_config(data):
         "name": name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}"
     })
 
-
-@socketio.on("confirm_plan")
-@socketio_auth_required
-def handle_confirm_plan(data):
-    """用户确认计划后开始执行"""
-    sid = request.sid
-    state = get_socket_state(sid)
-
-    if not state.current_plan:
-        emit("error", {"message": "当前没有可执行的计划"})
-        return
-
-    # 用户可能修改了计划，更新
-    user_plan = data.get("plan")
-    if user_plan and isinstance(user_plan, dict) and "steps" in user_plan:
-        state.current_plan = user_plan
-        # 重新编号
-        for i, step in enumerate(state.current_plan.get("steps", []), 1):
-            step["index"] = i
-
-    state.current_step_index = 0
-    state.plan_results = {}
-
-    emit("plan_confirmed", {
-        "plan": state.current_plan,
-        "message": "计划已确认，开始执行"
-    })
-
-    # 自动开始执行第一步
-    clear_stop(sid)
-    expected_session_id = state.msg_manager.get_current_session_id()
-
-    with _socket_configs_lock:
-        user_cfg = socket_configs.get(sid)
-    set_current_llm_config(user_cfg, sid)
-
-    try:
-        run_async_in_thread(_async_execute_plan_step(
-            sid, 0, expected_session_id
-        ))
-    except Exception as e:
-        logger.exception(f"Error starting plan execution for sid={sid}")
-        emit("error", {"message": str(e)})
-    finally:
-        set_current_llm_config(None, sid)
-
-
-@socketio.on("skip_step")
-@socketio_auth_required
-def handle_skip_step(data):
-    """用户跳过当前步骤"""
-    sid = request.sid
-    state = get_socket_state(sid)
-
-    if not state.current_plan:
-        emit("error", {"message": "当前没有正在执行的计划"})
-        return
-
-    step_index = data.get("step_index", state.current_step_index)
-    steps = state.current_plan.get("steps", [])
-
-    if step_index >= len(steps):
-        emit("error", {"message": "步骤索引超出范围"})
-        return
-
-    emit("plan_step_skipped", {
-        "step_index": step_index,
-        "step_title": steps[step_index].get("title", ""),
-        "message": f"已跳过步骤 {step_index + 1}"
-    })
-
-    # 继续执行下一步
-    state.current_step_index = step_index + 1
-    if state.current_step_index >= len(steps):
-        _finish_plan(sid)
-        return
-
-    clear_stop(sid)
-    expected_session_id = state.msg_manager.get_current_session_id()
-
-    with _socket_configs_lock:
-        user_cfg = socket_configs.get(sid)
-    set_current_llm_config(user_cfg, sid)
-
-    try:
-        run_async_in_thread(_async_execute_plan_step(
-            sid, state.current_step_index, expected_session_id
-        ))
-    except Exception as e:
-        logger.exception(f"Error skipping step for sid={sid}")
-        emit("error", {"message": str(e)})
-    finally:
-        set_current_llm_config(None, sid)
-
-
-@socketio.on("cancel_plan")
-@socketio_auth_required
-def handle_cancel_plan():
-    """用户取消当前计划"""
-    sid = request.sid
-    state = get_socket_state(sid)
-
-    state.current_plan = None
-    state.current_step_index = 0
-    state.plan_results = {}
-    set_stop(sid)
-
-    emit("plan_cancelled", {"message": "计划已取消"})
-
-
-async def _async_handle_planning(sid: str, user_message: str, expected_session_id: str):
-    """计划模式：生成任务计划"""
-    state = get_socket_state(sid)
-    from langchain_core.messages import HumanMessage
-
-    emit("thinking", {"message": "Planner 正在分析需求并制定计划..."})
-    emit("agent_start", {"agent": "planner", "message": "制定计划中..."})
-
-    # 构建 Planner 输入
-    plan_prompt = (
-        f"请为以下需求制定一个详细的执行计划：\n\n"
-        f"{user_message}\n\n"
-        f"请分析需求并输出 JSON 格式的任务计划。"
-    )
-
-    plan_state = {
-        "messages": [HumanMessage(content=plan_prompt, name="Human")],
-    }
-
-    try:
-        result = await planner_node(plan_state, sid=sid)
-        planner_msg = result["messages"][-1]
-        plan_text = planner_msg.content
-
-        plan = parse_plan_from_response(plan_text)
-        if not plan or "steps" not in plan:
-            logger.warning(f"Failed to parse plan from response for sid={sid}")
-            emit("error", {"message": "计划解析失败，请重试或用更明确的描述"})
-            emit("agent_finish", {"agent": "planner", "message": "空闲"})
-            return
-
-        # 确保步骤有正确的 index
-        for i, step in enumerate(plan.get("steps", []), 1):
-            step["index"] = i
-
-        state.current_plan = plan
-        state.current_step_index = 0
-        state.plan_results = {}
-
-        # 保存用户消息到数据库
-        state.msg_manager.add_human_message(user_message)
-
-        emit("plan_generated", {
-            "title": plan.get("title", "任务计划"),
-            "steps": plan.get("steps", []),
-            "message": f"已生成计划：{plan.get('title', '任务计划')}，共 {len(plan.get('steps', []))} 个步骤"
-        })
-        emit("agent_finish", {"agent": "planner", "message": "空闲"})
-
-    except Exception as e:
-        logger.exception(f"Error generating plan for sid={sid}")
-        emit("error", {"message": f"计划生成失败: {str(e)}"})
-        emit("agent_finish", {"agent": "planner", "message": "空闲"})
-
-
-async def _async_execute_plan_step(sid: str, step_index: int, expected_session_id: str):
-    """执行计划中的某一步"""
-    state = get_socket_state(sid)
-
-    if not state.current_plan or step_index >= len(state.current_plan.get("steps", [])):
-        return
-
-    steps = state.current_plan["steps"]
-    step = steps[step_index]
-
-    emit("plan_step_started", {
-        "step_index": step_index,
-        "step_title": step.get("title", ""),
-        "message": f"正在执行步骤 {step_index + 1}/{len(steps)}：{step.get('title', '')}"
-    })
-    emit("agent_start", {"agent": "coordinator", "message": f"执行步骤 {step_index + 1}..."})
-
-    from langchain_core.messages import HumanMessage
-
-    # 构建步骤执行任务
-    step_prompt = (
-        f"当前执行计划第 {step_index + 1} 步：{step.get('title', '')}\n"
-        f"步骤描述：{step.get('description', '')}\n\n"
-        f"请完成这个步骤的任务。如果需要研究或搜索信息，请先进行研究。"
-    )
-
-    # 获取历史消息（用于上下文）
-    messages = list(state.msg_manager.get_messages_for_model(max_turns=5))
-    current_msg = HumanMessage(content=step_prompt, name="Human")
-    messages_for_llm = messages + [current_msg]
-
-    initial_state = {
-        "messages": messages_for_llm,
-        "active_agent": None,
-        "task_context": {
-            "user_input": step_prompt,
-            "step_index": step_index,
-            "detected_language": state.detected_language,
-            "user_id": state.user_id,
-            "session_id": expected_session_id,
-            "mode": "planning",
-        },
-        "human_input_required": False,
-        "base_model_response": None,
-        "review_result": None,
-        "awaiting_review": False,
-    }
-
-    graph = coordination_graph  # 计划模式始终使用协调图
-    final_state = None
-
-    def _safe_emit_plan(event, data):
-        try:
-            socketio.emit(event, data, room=sid)
-        except Exception:
-            pass
-
-    try:
-        async for event in graph.astream(initial_state):
-            if is_stopped(sid):
-                break
-            for node_name, node_output in event.items():
-                if node_name == "coordinator":
-                    _safe_emit_plan("agent_start", {"agent": "coordinator", "message": "分析步骤需求..."})
-                elif node_name == "researcher":
-                    _safe_emit_plan("agent_finish", {"agent": "coordinator", "message": "分析完成"})
-                    _safe_emit_plan("agent_start", {"agent": "researcher", "message": "调研中..."})
-                elif node_name == "responder":
-                    if "researcher" in event:
-                        _safe_emit_plan("agent_finish", {"agent": "researcher", "message": "调研完成"})
-                    _safe_emit_plan("agent_start", {"agent": "responder", "message": "生成结果..."})
-                final_state = node_output
-    except Exception as e:
-        logger.exception(f"Error executing plan step {step_index} for sid={sid}")
-        _emit_agent_reset(False, sid)
-        clear_stop(sid)
-        _safe_emit_plan("plan_step_error", {
-            "step_index": step_index,
-            "error": str(e),
-            "message": f"步骤 {step_index + 1} 执行失败"
-        })
-        return
-
-    _emit_agent_reset(False, sid)
-
-    if is_stopped(sid):
-        emit("generation_stopped", {"message": "生成已停止"})
-        return
-
-    if final_state is None:
-        emit("error", {"message": "步骤执行未产生结果"})
-        return
-
-    # 会话隔离检查
-    if state.msg_manager.get_current_session_id() != expected_session_id:
-        logger.info(f"Session changed during plan step, discarding result for sid={sid}")
-        return
-
-    step_result = final_state["messages"][-1].content
-    state.plan_results[step_index] = step_result
-
-    # 将步骤结果保存到消息历史
-    state.msg_manager.add_agent_message(
-        f"【步骤 {step_index + 1}】{step.get('title', '')}\n\n{step_result}",
-        "base_model"
-    )
-
-    # 自动标记步骤完成（AI 打勾）
-    emit("plan_step_completed", {
-        "step_index": step_index,
-        "step_title": step.get("title", ""),
-        "result": step_result,
-        "message": f"步骤 {step_index + 1}/{len(steps)} 已完成 ✅"
-    })
-
-    # 继续执行下一步
-    state.current_step_index = step_index + 1
-    if state.current_step_index >= len(steps):
-        _finish_plan(sid)
-        return
-
-    # 执行下一步（无延迟，连续执行提高效率）
-    await _async_execute_plan_step(sid, state.current_step_index, expected_session_id)
-
-
-def _finish_plan(sid: str):
-    """计划全部完成后生成总结"""
-    state = get_socket_state(sid)
-
-    if not state.current_plan:
-        return
-
-    steps = state.current_plan.get("steps", [])
-    emit("plan_completed", {
-        "title": state.current_plan.get("title", "任务计划"),
-        "total_steps": len(steps),
-        "completed_steps": len(state.plan_results),
-        "message": f"🎉 计划全部完成！共 {len(steps)} 个步骤"
-    })
-
-    # 清空当前计划，但保留 planning_mode 为 True 以便继续
-    state.current_plan = None
-    state.current_step_index = 0
-    state.plan_results = {}
 
 
 @socketio.on("disconnect")
