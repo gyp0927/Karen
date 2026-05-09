@@ -876,7 +876,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     _record_api_stats(sid, messages_for_llm, final_state, expected_session_id, call_start)
 
     # 3. 重置 Agent 状态
-    _emit_agent_reset(state.fast_mode, sid)
+    _emit_agent_reset(sid)
 
     if is_stopped(sid):
         # 清理流式占位符，避免用户看到未完成的"正在搜索..."
