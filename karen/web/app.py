@@ -819,11 +819,10 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
 
     set_streaming_callback(on_token_chunk, sid)
 
-    # ===== 提前创建流式气泡：搜索阶段用户也能看到反馈 =====
-    # 在搜索开始前就创建聊天气泡并显示占位文本，避免用户面对空白等待
-    _safe_emit("stream_start", {"agent": "responder"})
-    _safe_emit("token_chunk", {"token": "🔍 正在搜索相关信息，请稍候..."})
-    _stream_started = True  # 标记已启动，防止 LLM 回调重复发送 stream_start
+    # ===== 搜索阶段显示 thinking 提示，LLM 输出时再创建流式气泡 =====
+    # 避免占位文本和实际回复拼接在一起
+    _safe_emit("thinking", {"message": "🔍 正在搜索相关信息，请稍候..."})
+    # _stream_started 保持 False，让 LLM 回调的第一次 on_token_chunk 触发 stream_start
 
     final_state = None
     call_start = time.time()
