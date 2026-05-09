@@ -819,10 +819,9 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
 
     set_streaming_callback(on_token_chunk, sid)
 
-    # ===== 搜索阶段显示 thinking 提示，LLM 输出时再创建流式气泡 =====
-    # 避免占位文本和实际回复拼接在一起
-    _safe_emit("thinking", {"message": "🔍 正在搜索相关信息，请稍候..."})
-    # _stream_started 保持 False，让 LLM 回调的第一次 on_token_chunk 触发 stream_start
+    # 创建流式消息气泡，确保 _stream_started 为 True 以便最后发送 stream_end
+    _safe_emit("stream_start", {"agent": "responder"})
+    _stream_started = True
 
     final_state = None
     call_start = time.time()
@@ -835,27 +834,15 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
                 break
             for node_name, node_output in event.items():
                 if node_name == "coordinator":
-                    _safe_emit("agent_start", {"agent": "coordinator", "message": "分析需求中..."})
+                    pass
                 elif node_name == "researcher":
-                    # 协调模式才有 coordinator
-                    if "coordinator" in event:
-                        _safe_emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
-                    _safe_emit("thinking", {"message": "🔍 正在搜索网络信息..."})
-                    _safe_emit("agent_start", {"agent": "researcher", "message": "调研中..."})
+                    pass
                 elif node_name == "web_searcher":
-                    # 快速/计划模式的并行搜索子 Agent
-                    _safe_emit("thinking", {"message": "🔍 正在搜索网络信息..."})
-                    _safe_emit("agent_start", {"agent": node_name, "message": "联网搜索中..."})
+                    pass
                 elif node_name == "memory_searcher":
-                    _safe_emit("thinking", {"message": "🧠 正在检索记忆..."})
-                    _safe_emit("agent_start", {"agent": node_name, "message": "记忆检索中..."})
+                    pass
                 elif node_name == "responder":
-                    # 完成前置节点
-                    if "researcher" in event:
-                        _safe_emit("agent_finish", {"agent": "researcher", "message": "调研完成"})
-                    if "web_searcher" in event or "memory_searcher" in event:
-                        _safe_emit("agent_finish", {"agent": "search_hub", "message": "搜索完成"})
-                    _safe_emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
+                    pass
                 final_state = node_output
     except Exception as e:
         logger.exception(f"Error processing message for sid={sid}")
