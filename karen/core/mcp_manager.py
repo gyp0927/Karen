@@ -109,7 +109,13 @@ class MCPManager:
                    env: dict = None, url: str = "", transport: str = "stdio") -> bool:
         """添加/更新服务器配置"""
         # 命令白名单校验:防止远程攻击者(在 LOCAL_ONLY 误绕过等场景下)注入任意 shell 命令
-        if transport == "stdio" and command and _MCP_ALLOWED:
+        # 白名单为空时拒绝所有命令（默认安全策略）
+        if transport == "stdio" and command:
+            if not _MCP_ALLOWED:
+                raise ValueError(
+                    "MCP 命令白名单为空，拒绝启动所有 stdio 服务器。"
+                    "请通过环境变量 MCP_ALLOWED_COMMANDS 配置白名单（如 'npx,uvx,python'）"
+                )
             cmd_basename = os.path.basename(command).lower()
             if cmd_basename not in _MCP_ALLOWED and command not in _MCP_ALLOWED:
                 raise ValueError(

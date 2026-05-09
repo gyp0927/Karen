@@ -181,6 +181,9 @@ class PluginRegistry:
     def _scan_plugin_ast(self, source: str, filepath: str) -> bool:
         """对插件源码进行 AST 安全检查。
 
+        TODO: 添加可选的插件签名/哈希验证机制，防止插件被篡改。
+        当前仅做 AST 静态扫描，不验证文件完整性。
+
         禁止导入危险模块和调用危险函数。
         这是最后一道防线——插件仍然运行在宿主进程中。
         """

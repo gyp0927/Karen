@@ -396,7 +396,7 @@ class MigrationEngine:
         """Migrate a memory from cold to hot tier.
 
         Args:
-            chunk_id: Memory to migrate.
+            memory_id: Memory to migrate.
 
         Returns:
             Migration result.
@@ -449,7 +449,6 @@ class MigrationEngine:
                 "migrated_cold_to_hot",
                 memory_id=str(memory_id),
                 summary_len=len(summary),
-                expanded_len=len(decompressed),
             )
 
             return MigrationResult(
