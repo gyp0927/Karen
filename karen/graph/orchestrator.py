@@ -175,7 +175,8 @@ async def _search_node(
 
     user_id = state.get("task_context", {}).get("user_id", "")
     session_id = state.get("task_context", {}).get("session_id", "")
-    result = await search_fn(query, user_id, session_id=session_id)
+    fast_mode = state.get("task_context", {}).get("mode") in ("fast", "planning")
+    result = await search_fn(query, user_id, session_id=session_id, fast_mode=fast_mode)
     if result:
         from langchain_core.messages import SystemMessage
         # SystemMessage 必须显式指令"基于以上结果"，否则 LLM 会忽略检索文本回退到训练知识。

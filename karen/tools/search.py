@@ -24,6 +24,12 @@ _FETCH_TIMEOUT = 8
 _MAX_FETCH_WORKERS = 3
 _MAX_RETRIES = 2
 
+# 快速模式专用超时（ aggressive —— 快速模式追求速度而非 completeness ）
+_FAST_SEARCH_TIMEOUT = 6
+_FAST_FETCH_TIMEOUT = 3
+_FAST_MAX_RETRIES = 1
+_FAST_MAX_FETCH_WORKERS = 2
+
 # CJK Unified Ideographs (U+4E00–U+9FFF)，用于判断 query 是否含中文
 _CJK_RE = re.compile(r"[一-鿿]")
 
@@ -264,12 +270,15 @@ def _bing_search(query: str, max_results: int) -> list[dict] | None:
 
 # ========== 统一搜索入口 ==========
 
-def duckduckgo_search(query: str, max_results: int = 2) -> list[dict]:
+def duckduckgo_search(query: str, max_results: int = 2, fast_mode: bool = False) -> list[dict]:
     """搜索入口，带多源 fallback 和重试。
 
     搜索优先级：
     - 中文 query：360 → Bing → DDG（DDG 对中文时事查询常返回垃圾/无关结果）
     - 英文 query：DDG → 360 → Bing
+
+    Args:
+        fast_mode: 快速模式——减少超时和重试次数，优先返回结果速度。
     """
     cached = _get_cached_search(query)
     if cached is not None:
@@ -289,12 +298,27 @@ def duckduckgo_search(query: str, max_results: int = 2) -> list[dict]:
             ("bing", _bing_search),
         ]
 
+    # 快速模式：减少重试，缩短超时
+    max_retries = _FAST_MAX_RETRIES if fast_mode else _MAX_RETRIES
+    search_timeout = _FAST_SEARCH_TIMEOUT if fast_mode else _SEARCH_TIMEOUT
+
     last_error = None
 
     for source_name, source_fn in sources:
-        for attempt in range(_MAX_RETRIES):
+        for attempt in range(max_retries):
             try:
-                results = source_fn(query, max_results)
+                # 快速模式下给 source_fn 传更短超时（通过闭包捕获的全局变量控制）
+                if fast_mode:
+                    # 临时修改全局超时，source_fn 内部使用这些全局变量
+                    orig_timeout = globals().get('_SEARCH_TIMEOUT')
+                    globals()['_SEARCH_TIMEOUT'] = search_timeout
+                    try:
+                        results = source_fn(query, max_results)
+                    finally:
+                        if orig_timeout is not None:
+                            globals()['_SEARCH_TIMEOUT'] = orig_timeout
+                else:
+                    results = source_fn(query, max_results)
                 if results:
                     logger.info(
                         f"Search '{query}' via {source_name}: {len(results)} results"
@@ -309,11 +333,11 @@ def duckduckgo_search(query: str, max_results: int = 2) -> list[dict]:
                 last_error = e
                 logger.warning(
                     f"Search source={source_name} "
-                    f"attempt={attempt + 1}/{_MAX_RETRIES} "
+                    f"attempt={attempt + 1}/{max_retries} "
                     f"failed for '{query}': {e}"
                 )
-                if attempt < _MAX_RETRIES - 1:
-                    time.sleep(0.5 * (attempt + 1))
+                if attempt < max_retries - 1:
+                    time.sleep(0.3 * (attempt + 1) if fast_mode else 0.5 * (attempt + 1))
 
     logger.warning(
         f"All search sources failed for query: {query} - {last_error}"
@@ -323,10 +347,10 @@ def duckduckgo_search(query: str, max_results: int = 2) -> list[dict]:
 
 # ========== 网页抓取 ==========
 
-def fetch_page_content(url: str, max_chars: int = 1000) -> str:
-    """获取网页内容。超时 8 秒。"""
+def fetch_page_content(url: str, max_chars: int = 1000, timeout: int = _FETCH_TIMEOUT) -> str:
+    """获取网页内容。默认超时 8 秒，可通过 timeout 参数覆盖。"""
     try:
-        html = _fetch(url, timeout=_FETCH_TIMEOUT)
+        html = _fetch(url, timeout=timeout)
         text = re.sub(
             r'<(script|style)[^>]*>.*?</\1>',
             '',
@@ -343,11 +367,22 @@ def fetch_page_content(url: str, max_chars: int = 1000) -> str:
         return "[无法获取网页内容]"
 
 
-def _fetch_all_pages(urls: list[str], max_chars: int = 1000) -> dict[str, str]:
+def _fetch_all_pages(urls: list[str], max_chars: int = 1000, fast_mode: bool = False) -> dict[str, str]:
+    """并行抓取多个页面。
+
+    Args:
+        fast_mode: 快速模式——减少 workers 和每个页面的超时，优先速度。
+    """
     contents: dict[str, str] = {}
-    with ThreadPoolExecutor(max_workers=_MAX_FETCH_WORKERS) as executor:
+    workers = _FAST_MAX_FETCH_WORKERS if fast_mode else _MAX_FETCH_WORKERS
+    fetch_timeout = _FAST_FETCH_TIMEOUT if fast_mode else _FETCH_TIMEOUT
+
+    def _fetch_with_timeout(url: str) -> str:
+        return fetch_page_content(url, max_chars=max_chars, timeout=fetch_timeout)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(fetch_page_content, url, max_chars): url
+            executor.submit(_fetch_with_timeout, url): url
             for url in urls
         }
         for future in as_completed(futures):
@@ -360,22 +395,31 @@ def _fetch_all_pages(urls: list[str], max_chars: int = 1000) -> dict[str, str]:
     return contents
 
 
-def search_and_summarize(query: str, max_results: int = 2, fetch_content: bool = True) -> str:
-    """搜索并返回格式化的结果文本（供 LLM 使用）。"""
-    results = duckduckgo_search(query, max_results=max_results)
+def search_and_summarize(query: str, max_results: int = 2, fetch_content: bool = True, fast_mode: bool = False) -> str:
+    """搜索并返回格式化的结果文本（供 LLM 使用）。
+
+    Args:
+        fast_mode: 快速模式——减少超时、重试、页面抓取数量和字符数。
+    """
+    # 快速模式：减少结果数，不抓取页面内容（只返回标题和链接节省 ~8-16s）
+    effective_max = 1 if fast_mode else max_results
+    effective_fetch = False if fast_mode else fetch_content
+
+    results = duckduckgo_search(query, max_results=effective_max, fast_mode=fast_mode)
     if not results:
         return "[搜索未找到相关结果]"
 
     page_contents = {}
-    if fetch_content:
+    if effective_fetch:
         urls = [r["href"] for r in results]
-        page_contents = _fetch_all_pages(urls, max_chars=1000)
+        max_chars = 500 if fast_mode else 1000
+        page_contents = _fetch_all_pages(urls, max_chars=max_chars, fast_mode=fast_mode)
 
     output_lines = [f"## 搜索结果：'{query}'\n"]
     for i, r in enumerate(results, 1):
         output_lines.append(f"**[{i}]** {r['title']}")
         output_lines.append(f"链接: {r['href']}")
-        if fetch_content:
+        if effective_fetch:
             content = page_contents.get(r["href"], "[无法获取网页内容]")
             output_lines.append(f"摘要: {content}\n")
         else:

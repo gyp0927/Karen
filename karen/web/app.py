@@ -826,12 +826,6 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         except Exception as e:
             logger.debug(f"Failed to emit {event} to {sid}: {e}")
 
-    # 根据模式显示不同的思考状态提示
-    if state.fast_mode:
-        _safe_emit("thinking", {"message": "正在思考..."})
-    else:
-        _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
-
     # 设置流式输出回调：直接发送每个 token，零延迟
     _stream_started = False
 
@@ -847,6 +841,18 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         pass  # 实时发送无需 flush
 
     set_streaming_callback(on_token_chunk, sid)
+
+    # ===== 提前创建流式气泡：搜索阶段用户也能看到反馈 =====
+    # 在搜索开始前就创建聊天气泡并显示占位文本，避免用户面对空白等待
+    _safe_emit("stream_start", {"agent": "responder"})
+    _safe_emit("token_chunk", {"token": "🔍 正在搜索相关信息，请稍候..."})
+    _stream_started = True  # 标记已启动，防止 LLM 回调重复发送 stream_start
+
+    # 根据模式显示不同的思考状态提示（会持续更新）
+    if state.fast_mode:
+        _safe_emit("thinking", {"message": "正在分析需求..."})
+    else:
+        _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
 
     final_state = None
     call_start = time.time()
@@ -864,11 +870,15 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
                     # 协调模式才有 coordinator
                     if "coordinator" in event:
                         _safe_emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
+                    _safe_emit("thinking", {"message": "🔍 正在搜索网络信息..."})
                     _safe_emit("agent_start", {"agent": "researcher", "message": "调研中..."})
-                elif node_name in ("web_searcher", "memory_searcher"):
+                elif node_name == "web_searcher":
                     # 快速/计划模式的并行搜索子 Agent
-                    agent_label = "联网搜索" if node_name == "web_searcher" else "记忆检索"
-                    _safe_emit("agent_start", {"agent": node_name, "message": f"{agent_label}中..."})
+                    _safe_emit("thinking", {"message": "🔍 正在搜索网络信息..."})
+                    _safe_emit("agent_start", {"agent": node_name, "message": "联网搜索中..."})
+                elif node_name == "memory_searcher":
+                    _safe_emit("thinking", {"message": "🧠 正在检索记忆..."})
+                    _safe_emit("agent_start", {"agent": node_name, "message": "记忆检索中..."})
                 elif node_name == "responder":
                     # 完成前置节点
                     if "researcher" in event:
@@ -882,6 +892,9 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         clear_streaming_callback(sid)
         _emit_agent_reset(state.fast_mode, sid)
         clear_stop(sid)
+        # 如果流式气泡已创建，发送 stream_end 清理占位符
+        if _stream_started:
+            _safe_emit("stream_end", {"message": f"❌ 处理出错: {str(e)}", "awaiting_review": False})
         _safe_emit("message_failed", {"message": user_message, "error": str(e)})
         return
 
@@ -895,11 +908,16 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     _emit_agent_reset(state.fast_mode, sid)
 
     if is_stopped(sid):
+        # 清理流式占位符，避免用户看到未完成的"正在搜索..."
+        if _stream_started:
+            _safe_emit("stream_end", {"message": "（生成已停止）", "awaiting_review": False})
         _safe_emit("generation_stopped", {"message": "生成已停止"})
         return
 
     if final_state is None:
         clear_streaming_callback(sid)
+        if _stream_started:
+            _safe_emit("stream_end", {"message": "未生成回复", "awaiting_review": False})
         _safe_emit("error", {"message": "No response generated"})
         return
 

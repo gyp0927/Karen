@@ -421,7 +421,15 @@ function clearMessages() {
 
 function showThinking(text) {
   showEmptyState(false);
-  const div = document.createElement("div");
+  // 如果已有 thinking 指示器，只更新文本，避免重复创建
+  let div = document.getElementById("thinkingIndicator");
+  if (div) {
+    const span = div.querySelector(".thinking-msg span");
+    if (span) span.textContent = text;
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return;
+  }
+  div = document.createElement("div");
   div.className = "message assistant";
   div.id = "thinkingIndicator";
   div.innerHTML = `
@@ -808,10 +816,13 @@ socket.on("token_chunk", (data) => {
 });
 
 socket.on("stream_end", (data) => {
+  clearThinking();
   if (currentStreamElement) {
     const contentEl = currentStreamElement.querySelector(".message-content");
     if (contentEl) {
-      contentEl.innerHTML = marked.parse(streamBuffer);
+      // 优先使用服务器提供的最终消息（可替换早期占位符文本）
+      const finalText = data.message || streamBuffer;
+      contentEl.innerHTML = marked.parse(finalText);
       contentEl.querySelectorAll("pre code").forEach(block => {
         hljs.highlightElement(block);
       });
