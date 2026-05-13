@@ -1,6 +1,6 @@
 # 凯伦 — 多 Agent AI 聊天系统
 
-一个功能完善的多 Agent AI 聊天系统，采用 LangGraph 实现智能体协作编排，支持 20+ 家国内外大语言模型，提供 Web、桌面客户端、控制台三种使用方式。
+一个多 Agent AI 聊天系统，采用 LangGraph 实现智能体协作编排，支持 24 家国内外大语言模型，提供 Web、桌面客户端、控制台三种使用方式。
 
 [![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)](https://flask.palletsprojects.com/)
@@ -8,27 +8,26 @@
 
 ---
 
-## ✨ 功能特性
+## 功能特性
 
 | 功能 | 说明 |
 |------|------|
-| 🤖 多 Agent 协作 | Coordinator → Researcher → Responder → Reviewer 智能协作流程 |
-| 🌐 多模型支持 | 支持 20+ 家国内外 LLM 厂商（OpenAI 兼容 API） |
-| 📚 RAG 知识库 | 基于 Embedding 的文档检索（支持 PDF / Word / 文本） |
-| 🔍 联网搜索 | 多源搜索:中文 query 优先 360,英文优先 DuckDuckGo,Bing 兜底 |
-| 🐍 代码执行 | Python 代码沙箱（AST 安全检查） |
-| 💬 多会话管理 | 多会话切换、SQLite 持久化存储 |
-| 📤 记录导出 | Markdown / JSON / HTML / PDF 格式 |
-| ⚡ 流式输出 | Token 级实时响应 |
-| 📊 用量统计 | Token 用量统计与费用估算 |
-| 🌙 主题切换 | 亮色 / 暗色 / 跟随系统 |
-| 🧠 自适应记忆 | 基于语义的热/冷分层记忆系统，跨会话长期记忆 |
-| 🔌 插件系统 | 可扩展插件机制 |
-| 🔗 MCP 支持 | Model Context Protocol 服务器接入 |
+| 多 Agent 协作 | Coordinator → Researcher → Responder 智能协作流程 |
+| 多模型支持 | 支持 24 家国内外 LLM 厂商（OpenAI 兼容 API） |
+| RAG 知识库 | 基于 Embedding 的文档检索（PDF / Word / 文本） |
+| 联网搜索 | 多源搜索：中文优先 360，英文优先 DuckDuckGo，Bing 兜底 |
+| 代码执行 | Python 代码沙箱（AST 安全检查，默认关闭） |
+| 多会话管理 | 多会话切换、SQLite 持久化存储 |
+| 记录导出 | Markdown / JSON / HTML / PDF 格式 |
+| 流式输出 | Token 级实时响应 |
+| 用量统计 | Token 用量统计与费用估算 |
+| 自适应记忆 | 基于语义的热/冷分层记忆系统，跨会话长期记忆 |
+| 插件系统 | 可扩展插件机制 |
+| MCP 支持 | Model Context Protocol 服务器接入 |
 
 ---
 
-## 🚀 快速开始
+## 快速开始
 
 ### 环境要求
 
@@ -38,32 +37,31 @@
 ### 安装
 
 ```bash
-git clone https://github.com/gyp0927/guodong-ai.git
-cd guodong-ai
+git clone https://github.com/gyp0927/Karen.git
+cd Karen
 pip install -r requirements.txt
 ```
 
-### 配置 API Key
+### 配置
 
-复制 `.env.example` 为 `.env`，填写你的 API Key：
+复制 `.env.example` 为 `.env`：
 
 ```bash
 cp .env.example .env
 ```
 
-编辑 `.env`：
+编辑 `.env`，填写 API Key：
 
 ```env
-# 选择默认提供商和模型
-PROVIDER=deepseek
-MODEL=deepseek-chat
-API_KEY=your-api-key-here
-BASE_URL=https://api.deepseek.com/v1
+LLM_PROVIDER=minimax
+LLM_API_KEY=your-api-key-here
 ```
 
-#### 记忆系统配置（可选）
+支持的提供商：`deepseek`、`qwen`、`minimax`、`doubao`、`glm`、`ernie`、`hunyuan`、`spark`、`kimi`、`siliconflow`、`kimi-code`、`yi`、`baichuan`、`openai`、`anthropic`、`gemini`、`grok`、`mistral`、`cohere`、`perplexity`、`groq`、`together`、`azure`、`ollama`
 
-系统默认启用本地自适应记忆，使用 sentence-transformers 进行本地 Embedding（无需额外 API Key）：
+也可通过 Web 配置页面 `/config` 添加和管理多个模型配置，随时切换。
+
+#### 记忆系统配置（可选）
 
 ```env
 EMBEDDING_PROVIDER=sentence-transformers
@@ -72,16 +70,15 @@ EMBEDDING_DIMENSION=384
 METADATA_DB_URL=sqlite+aiosqlite:///./data/adaptive_memory.db
 ```
 
-支持提供商：OpenAI、Anthropic、Google Gemini、DeepSeek、阿里通义千问、月之暗面 Kimi、智谱 GLM、xAI Grok、Mistral、Groq、Azure OpenAI、Ollama（本地）等。
-
-#### 安全相关 env(可选)
+#### 安全配置（可选）
 
 ```env
-ENABLE_AUTH=false                                  # 设 true 后 RAG/execute/plugin 端点要 X-API-Key
-TRUST_PROXY=false                                  # 反代后置时设 true,否则任何客户端可伪造 127.0.0.1 绕 LOCAL_ONLY
+ENABLE_AUTH=false              # 设为 true 后 RAG/execute/plugin 端点需要 X-API-Key
+TRUST_PROXY=false              # 反向代理后置时设为 true
 CORS_ORIGINS=http://localhost:5000,http://127.0.0.1:5000
-MAX_UPLOAD_BYTES=52428800                          # 50MB 上传上限
-MCP_ALLOWED_COMMANDS=                              # 留空=允许任意,生产建议 "npx,uvx,python"
+MAX_UPLOAD_BYTES=52428800      # 50MB 上传上限
+MCP_ALLOWED_COMMANDS=npx,uvx   # 留空=允许任意，生产环境建议限定
+ENABLE_CODE_EXECUTION=false    # 代码执行开关
 ```
 
 ### 启动
@@ -112,7 +109,7 @@ python main.py
 
 ---
 
-## 🏗️ 系统架构
+## 系统架构
 
 ```
 用户交互层
@@ -130,17 +127,25 @@ Agent 编排 (LangGraph)    核心功能
 ├─ Coordinator 调度器      ├─ 配置管理
 ├─ Researcher  研究员      ├─ RAG 知识库
 ├─ Responder   响应器      ├─ 自适应记忆
-├─ Reviewer    审查者      ├─ 联网搜索
-└─ Planner     规划器      ├─ 代码执行
+└─ Reviewer    审查者      ├─ 联网搜索
+                            ├─ 代码执行
                             └─ 聊天记录导出
        │
        ▼
-   LLM 提供商 (20+ 家)
+   LLM 提供商 (24 家)
 ```
 
-### 多 Agent 协作流程
+### Agent 协作流程
 
-**协调模式（默认）**
+**快速模式（默认）**
+
+```
+用户输入 → Responder → 直接输出
+```
+
+适合日常对话，响应最快。Responder 内部会根据需要自动触发搜索或工具调用。
+
+**协调模式**
 
 ```
 用户输入 → Coordinator（分析路由）
@@ -156,64 +161,72 @@ Researcher ──────→ Responder
                     最终输出
 ```
 
-**快速模式**
-
-```
-用户输入 → Responder → 直接输出
-```
-
-适合简单对话，跳过路由和调研环节，响应更快。
+适合复杂问题，经过完整的多 Agent 协作流程。
 
 ---
 
-## 📂 项目结构
+## 项目结构
 
 ```
-karen/
-├── agents/                  # Agent 工厂与定义
-│   └── factory.py
+.
+├── agents/                  # Agent 节点定义
+│   ├── llm.py              # LLM 基础设施（HTTP 客户端、配置隔离）
+│   ├── nodes.py            # Agent 节点（Coordinator/Researcher/Responder/Reviewer）
+│   ├── prompts.py          # 系统提示词
+│   ├── search.py           # 搜索 Agent
+│   └── tools.py            # 工具调用 Agent
+├── cognition/               # 认知模块
+│   ├── engine.py           # 认知引擎
+│   ├── human_mind.py       # 类人思维
+│   ├── tool_engine.py      # 工具执行引擎
+│   └── types.py            # 认知类型定义
 ├── core/                    # 核心功能模块
-│   ├── config.py           # 配置管理
-│   ├── memory_client.py    # 自适应记忆系统客户端
+│   ├── config.py           # 配置管理（24 家提供商配置）
+│   ├── auth.py             # 认证与权限
+│   ├── cache.py            # 响应缓存（SQLite）
 │   ├── rag.py              # RAG 知识库
 │   ├── export.py           # 聊天记录导出
-│   ├── cache.py            # 响应缓存
 │   ├── plugin_system.py    # 插件系统
 │   ├── mcp_manager.py      # MCP 服务器管理
 │   ├── model_router.py     # 模型路由
-│   └── vector_store/       # 向量存储后端
+│   └── memory_client.py    # 自适应记忆客户端
 ├── graph/                   # LangGraph 编排
-│   └── orchestrator.py
+│   └── orchestrator.py     # 多 Agent 图定义
+├── hot_and_cold_memory/     # 热/冷分层记忆系统
+│   ├── ingestion/          # 记忆摄取与嵌入
+│   ├── tiers/              # 热层/冷层/压缩引擎
+│   ├── migration/          # 跨层迁移引擎
+│   └── storage/            # 元数据存储与向量存储
 ├── interface/               # 用户接口
-│   └── human_interface.py
-├── prompts/                 # 系统提示词
-│   ├── coordinator_prompt.py
-│   └── reviewer_prompt.py
+│   └── human_interface.py  # 统一交互接口
 ├── state/                   # 状态管理
 │   ├── manager.py          # 会话管理
 │   ├── persistence.py      # 数据持久化
-│   └── model_config_manager.py
+│   ├── model_config_manager.py  # 模型配置管理
+│   └── stats.py            # 用量统计
 ├── tools/                   # 工具模块
-│   ├── search.py           # 联网搜索
-│   └── code_executor.py    # 代码执行
+│   ├── search.py           # 联网搜索实现
+│   └── code_executor.py    # 代码执行沙箱
 ├── web/                     # Web 应用
-│   ├── app.py              # Flask 后端
+│   ├── app.py              # Flask 后端 + SocketIO
+│   ├── api.py              # REST API
 │   ├── templates/          # HTML 模板
-│   └── static/             # CSS / JS
+│   └── static/             # CSS / JS / 图片
+├── plugins/                 # 插件目录
 ├── main.py                  # 控制台入口
 ├── desktop_app.py           # 桌面应用入口
 ├── desktop_client.py        # 桌面客户端（WebView）
-├── config_gui.py            # 配置 GUI
+├── test_all.py              # 测试套件
 └── requirements.txt
 ```
 
 ---
 
-## 📖 使用指南
+## 使用指南
 
 ### 多模型配置
 
-访问 `http://127.0.0.1:5000/config` 进入配置页面，可添加多个模型配置并随时切换。
+访问 `http://127.0.0.1:5000/config` 进入配置页面，可添加多个模型配置并随时切换。配置保存在 `state/model_configs.json`。
 
 ### 知识库
 
@@ -229,6 +242,7 @@ karen/
 - **记忆保存**：对话结束后自动保存关键信息到长期记忆
 - **语义搜索**：基于向量相似度检索，无关关键词也能找到相关记忆
 - **跨会话**：切换会话后仍可检索之前对话中的重要信息
+- **分层存储**：高频记忆保留在热层（完整内容），低频记忆迁移到冷层（压缩摘要），节省存储成本
 
 记忆数据存储在本地：
 - `data/adaptive_memory.db` — 记忆元数据（SQLite）
@@ -237,17 +251,17 @@ karen/
 
 ### 联网搜索
 
-聊天时根据意图自动触发(查询含"什么是 / 为什么 / 介绍 / 最新 / 价格 / 天气"等事实/时效关键词时启用)。中文查询优先走 360 搜索,英文优先 DuckDuckGo,Bing 作为 fallback。无需手动开关。
+聊天时根据意图自动触发（查询含"什么是 / 为什么 / 介绍 / 最新 / 价格 / 天气"等事实/时效关键词时启用）。中文查询优先走 360 搜索，英文优先 DuckDuckGo，Bing 作为 fallback。无需手动开关。
 
 ### 代码执行
 
-消息中包含 Python 代码块时，系统会自动检测并提供运行按钮，代码在 AST 沙箱中安全执行。
+消息中包含 Python 代码块时，系统会自动检测并提供运行按钮。代码在 AST 沙箱中安全执行。需在 `.env` 中设置 `ENABLE_CODE_EXECUTION=true` 开启。
 
 ### 控制台命令
 
 ```
 /review    开启/关闭回答审查
-/fast      切换快速模式
+/fast      切换快速/协调模式
 /clear     清空当前会话
 /history   查看历史消息
 exit       退出程序
@@ -255,7 +269,20 @@ exit       退出程序
 
 ---
 
-## 🛠️ 技术栈
+## 性能优化
+
+| 优化项 | 说明 |
+|--------|------|
+| 连接池 | HTTP 连接池（max_connections=100, keepalive=20） |
+| 连接预热 | 启动时预建立 LLM 连接，减少首 token 延迟 |
+| 并发控制 | LLM 流式请求信号量（max 8），防止限流 |
+| Token 批处理 | 服务端凑齐 12 字符再 emit，平衡实时性与网络开销 |
+| 响应缓存 | SQLite 缓存，相同请求直接返回 |
+| 问候语模板 | 常见问候语走模板，不走 LLM |
+
+---
+
+## 技术栈
 
 | 技术 | 用途 |
 |------|------|
@@ -263,29 +290,17 @@ exit       退出程序
 | Flask + SocketIO | Web 服务与实时通信 |
 | LangGraph | 多 Agent 工作流编排 |
 | LangChain | LLM 调用封装 |
-| SQLite | 数据持久化 |
+| SQLite | 数据持久化与缓存 |
 | Qdrant | 向量数据库（本地模式） |
 | sentence-transformers | 本地 Embedding 模型 |
 | WebView2 | 桌面客户端渲染 |
 
 ---
 
-## 🤝 贡献
-
-欢迎 Issue 和 PR！
-
-1. Fork 本仓库
-2. 创建你的功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 打开 Pull Request
-
----
-
-## 📄 许可证
+## 许可证
 
 [MIT](LICENSE)
 
 ---
 
-<p align="center">Made by 凯伦 Team</p>
+<p align="center">Made with ❤️ by 凯伦 Team</p>
