@@ -42,7 +42,7 @@ _KEYWORD_PATTERNS = {
     ],
     "comparison_keywords": [
         "比较", "对比", "区别", "差异", "vs", "versus",
-        "compare", "difference", "versus", "better", "worse",
+        "compare", "difference", "better", "worse",
     ],
     "creative_keywords": [
         "写", "创作", "生成", "设计", "创意", "故事", "文章", "诗歌",
@@ -117,29 +117,80 @@ class ComplexityAnalyzer:
 class ModelRouter:
     """模型路由器"""
 
+    # powerful 档目前指向编码专用模型（kimi-for-coding），
+    # 对非编码问题会静默返回空响应。所以 powerful 档要再加一层"是否真编码意图"判断。
+    _CODING_VERBS = (
+        "写代码", "写一段", "写一个", "写个", "实现", "重构", "调试", "debug",
+        "修复", "修一下", "修一个", "改一下", "改个 bug",
+        "优化", "测试用例", "单元测试", "重写", "解析", "parse",
+        "implement", "rewrite", "refactor", "optimize", "fix this",
+    )
+    _ERROR_KWS = (
+        "报错", "异常", "栈追踪", "stacktrace", "traceback",
+        "exception", "core dump", "segfault",
+    )
+    # 出现这些"讨论性"词汇时，即使匹配到了 python/java 等语言名，也判定为非编码
+    _DISCUSSION_MARKERS = (
+        "哪个", "哪种", "更好", "更适合", "对比", "区别", "差异",
+        "vs", "versus", "compare", "difference", "better than", "worse than",
+        "推荐", "建议", "选哪个", "选什么",
+    )
+
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
         self.analyzer = ComplexityAnalyzer()
-        self._tiers = self._load_tiers()
+        self._tiers: dict = {}
+        self._tiers_mtime: float = 0.0
+        self._load_tiers()
 
-    def _load_tiers(self) -> dict:
-        """从配置文件加载模型档位。"""
+    def _is_coding_intent(self, message: str) -> bool:
+        """更严格的编码意图判断。
+
+        powerful 档当前指向 kimi-for-coding，该模型对非编码问题会返回 HTTP 200 + 空响应，
+        所以只有真正动手写/调/改代码的请求才允许进入 powerful 档。
+
+        规则:
+        - 包含代码块标记 ``` 或报错栈关键词 → 编码
+        - 包含明确的编码动作词（写/实现/调试/重构/修复...）→ 编码
+        - 否则即使提到 python/java 之类的语言名，也不算编码（避免把"X 和 Y 哪个好"误判）
+        """
+        msg = message.lower()
+        if "```" in msg:
+            return True
+        if any(kw in msg for kw in self._ERROR_KWS):
+            # 出现讨论性词汇时判为非编码（如"stacktrace 是什么"）
+            if any(d in msg for d in self._DISCUSSION_MARKERS):
+                return False
+            return True
+        if any(v in msg for v in self._CODING_VERBS):
+            # 但若同时出现讨论性词汇，仍判为非编码（如"实现 X 和实现 Y 哪个更好"）
+            if any(d in msg for d in self._DISCUSSION_MARKERS):
+                return False
+            return True
+        return False
+
+    def _load_tiers(self) -> None:
+        """从配置文件加载模型档位（带 mtime 缓存刷新）。"""
         defaults = {
             "light": {"provider": "ollama", "model": "llama3.2", "description": "轻量模型（简单问答）"},
             "default": {"provider": "ollama", "model": "llama3.2", "description": "默认模型"},
             "powerful": {"provider": "ollama", "model": "llama3.2", "description": "强力模型（复杂任务）"},
         }
+        mtime = 0.0
         if os.path.exists(_CONFIG_FILE):
             try:
+                mtime = os.path.getmtime(_CONFIG_FILE)
+                if mtime <= self._tiers_mtime and self._tiers:
+                    return  # 文件未修改，跳过
                 with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 for tier in ["light", "default", "powerful"]:
                     if tier in data:
                         defaults[tier].update(data[tier])
-                return defaults
             except (OSError, json.JSONDecodeError) as e:
                 logger.warning(f"Failed to load model tier config: {e}")
-        return defaults
+        self._tiers = defaults
+        self._tiers_mtime = mtime
 
     def save_tiers(self):
         """保存模型档位配置。"""
@@ -164,11 +215,28 @@ class ModelRouter:
         self.save_tiers()
 
     def get_tier_config(self, tier: str) -> dict:
-        """获取指定档位的模型配置。"""
-        return self._tiers.get(tier, self._tiers["default"]).copy()
+        """获取指定档位的模型配置。
+
+        如果配置文件中 apiKey 为空，尝试从环境变量读取：
+        - siliconflow → SILICONFLOW_API_KEY
+        - kimi / kimi-code → KIMI_API_KEY
+        """
+        self._load_tiers()  # 自动刷新缓存
+        cfg = self._tiers.get(tier, self._tiers["default"]).copy()
+        if not cfg.get("apiKey"):
+            provider = cfg.get("provider", "")
+            env_key = None
+            if provider == "siliconflow":
+                env_key = os.getenv("SILICONFLOW_API_KEY")
+            elif provider in ("kimi", "kimi-code"):
+                env_key = os.getenv("KIMI_API_KEY")
+            if env_key:
+                cfg["apiKey"] = env_key
+        return cfg
 
     def get_all_tiers(self) -> dict:
         """获取所有档位配置（API Key 脱敏）。"""
+        self._load_tiers()
         result = {}
         for tier, cfg in self._tiers.items():
             result[tier] = dict(cfg)
@@ -214,6 +282,16 @@ class ModelRouter:
 
         analysis = self.analyzer.analyze(user_message, history_turns)
         tier = analysis["tier"]
+
+        # powerful 档当前是编码专用模型，对非编码问题会返回空。
+        # 复杂但非编码的问题降级到 default，让它走通用模型。
+        if tier == "powerful" and not self._is_coding_intent(user_message):
+            logger.info(
+                f"Powerful tier requested but non-coding intent detected, "
+                f"downgrading to default. message='{user_message[:50]}...'"
+            )
+            tier = "default"
+
         config = self.get_tier_config(tier)
 
         logger.info(f"Model routing: tier={tier}, score={analysis['score']}, message='{user_message[:50]}...'")

@@ -45,7 +45,7 @@ def reset_store(backend: str = None, persist_path: str = None):
 _EMBEDDING_MAX_CHARS = 8000
 
 
-def get_embedding(text: str, model: str = "text-embedding-3-small") -> Any | None:
+async def get_embedding(text: str, model: str = "text-embedding-3-small") -> Any | None:
     """获取文本的 embedding 向量。
 
     使用 OpenAI 兼容的 embedding API。
@@ -57,6 +57,7 @@ def get_embedding(text: str, model: str = "text-embedding-3-small") -> Any | Non
 
     try:
         import requests
+        import asyncio
         from core.config import get_api_key, get_base_url, get_provider
 
         base_url = get_base_url()
@@ -80,12 +81,16 @@ def get_embedding(text: str, model: str = "text-embedding-3-small") -> Any | Non
             "model": model,
             "input": truncated,
         }
-        resp = requests.post(
-            f"{base_url}/embeddings",
-            headers=headers,
-            json=body,
-            timeout=30,
-        )
+
+        def _do_request():
+            return requests.post(
+                f"{base_url}/embeddings",
+                headers=headers,
+                json=body,
+                timeout=30,
+            )
+
+        resp = await asyncio.to_thread(_do_request)
         if resp.status_code == 200:
             data = resp.json()
             vector = data["data"][0]["embedding"]
@@ -103,6 +108,13 @@ def get_embedding(text: str, model: str = "text-embedding-3-small") -> Any | Non
 
 def _split_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
     """将文本分割成重叠的块"""
+    # 安全校验：确保 chunk_size > overlap，否则会导致无限循环或零进度
+    if chunk_size <= 0:
+        chunk_size = 500
+    if overlap < 0:
+        overlap = 0
+    if overlap >= chunk_size:
+        overlap = chunk_size // 2
     chunks = []
     start = 0
     while start < len(text):
@@ -119,7 +131,7 @@ def _split_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str
     return [c for c in chunks if c]
 
 
-def add_document(text: str, source: str = "", chunk_size: int = 500) -> int:
+async def add_document(text: str, source: str = "", chunk_size: int = 500) -> int:
     """添加文档到知识库。
 
     参数:
@@ -138,7 +150,7 @@ def add_document(text: str, source: str = "", chunk_size: int = 500) -> int:
     chunks = _split_text(text, chunk_size)
     count = 0
     for i, chunk in enumerate(chunks):
-        vector = get_embedding(chunk)
+        vector = await get_embedding(chunk)
         if vector is not None:
             store.add(
                 vector=vector,
@@ -152,7 +164,7 @@ def add_document(text: str, source: str = "", chunk_size: int = 500) -> int:
     return count
 
 
-def search_knowledge(query: str, top_k: int = 3) -> str:
+async def search_knowledge(query: str, top_k: int = 3) -> str:
     """检索知识库并返回格式化结果。
 
     参数:
@@ -169,7 +181,7 @@ def search_knowledge(query: str, top_k: int = 3) -> str:
     if store.count() == 0:
         return "[知识库为空，请先上传文档]"
 
-    query_vector = get_embedding(query)
+    query_vector = await get_embedding(query)
     if query_vector is None:
         return "[无法获取查询向量，Embedding API 可能不可用]"
 

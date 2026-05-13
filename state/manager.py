@@ -76,7 +76,8 @@ class SessionManager:
     def new_session(self, title: str = "新对话") -> str:
         """创建新会话，返回会话ID"""
         with self._lock:
-            session_id = f"session_{int(time.time() * 1000)}"
+            import secrets
+            session_id = f"session_{secrets.token_hex(8)}"
             self._create_session(session_id, title)
             self.current_session_id = session_id
             logger.info(f"Created new session: {session_id}")

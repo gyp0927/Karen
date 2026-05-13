@@ -87,5 +87,5 @@ class DecayEngine:
             0.3 * cluster_component
         )
 
-        # Normalize to [0, 1]
-        return min(score / 10.0, 1.0)
+        # Normalize to [0, 1] — 分母 6.0 更贴合实际取值范围，避免阈值不可达
+        return min(score / 6.0, 1.0)

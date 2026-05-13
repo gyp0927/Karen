@@ -14,22 +14,21 @@
     response = mind.process_response("responder", query, raw_response, state)
 """
 import logging
+import os
 from typing import Optional
 
 from langchain_core.messages import AIMessage
 
 from cognition.types import CognitiveState, ThinkingMode
-from cognition.inner_monologue import (
+from cognition.engine import (
     get_monologue_engine,
     wrap_prompt_with_monologue,
-)
-from cognition.emotional_state import (
     get_emotional_manager,
     inject_emotion_to_prompt,
+    get_intuition_engine,
+    get_metacognition_engine,
+    get_persona_manager,
 )
-from cognition.intuition import get_intuition_engine
-from cognition.metacognition import get_metacognition_engine
-from cognition.persona import get_persona_manager
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +44,13 @@ class HumanMind:
         enable_metacognition: bool = True,
         enable_persona: bool = True,
     ):
-        self.enable_monologue = enable_monologue
-        self.enable_emotion = enable_emotion
-        self.enable_intuition = enable_intuition
-        self.enable_metacognition = enable_metacognition
-        self.enable_persona = enable_persona
+        # 全局开关：通过环境变量禁用整个认知层
+        _disabled = os.environ.get("DISABLE_COGNITION", "0").lower() in ("1", "true", "yes")
+        self.enable_monologue = enable_monologue and not _disabled
+        self.enable_emotion = enable_emotion and not _disabled
+        self.enable_intuition = enable_intuition and not _disabled
+        self.enable_metacognition = enable_metacognition and not _disabled
+        self.enable_persona = enable_persona and not _disabled
 
         # 初始化各子系统
         self.monologue = get_monologue_engine()

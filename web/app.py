@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import functools
 import io
 import logging
 import secrets
@@ -24,18 +25,19 @@ from werkzeug.utils import secure_filename
 from agents.llm import (
     set_current_llm_config, set_streaming_callback,
     clear_streaming_callback, clear_llm_cache, get_llm,
+    get_llm_provider_model,
 )
-from agents.nodes import create_agents, planner_node, parse_plan_from_response
+from agents.nodes import create_agents
 from agents.search import web_searcher_agent, memory_searcher_agent
 from agents.tools import tool_caller_node
-from graph.orchestrator import create_coordination_graph, create_fast_graph
+from graph.orchestrator import create_fast_graph
 from state.manager import SessionManager
 from state.stop_flag import set_stop, clear_stop, is_stopped, cleanup_sid
 from state.model_config_manager import (
     list_configs, list_configs_full, get_config, get_active_config,
     add_config, update_config, delete_config, set_active_config, sync_to_env
 )
-from core.config import PROVIDER_NAMES, BASE_URLS
+from core.config import PROVIDER_NAMES, BASE_URLS, GRAPH_TIMEOUT, SOCKET_INACTIVE_TIMEOUT, TOKEN_FLUSH_CHARS
 from core.rag import add_document, search_knowledge, get_knowledge_stats, clear_knowledge, list_documents, delete_document_by_source
 from core.export import export_markdown, export_json, export_html, export_pdf, get_export_filename
 from core.plugin_system import get_registry, list_plugins, execute_plugin
@@ -74,11 +76,12 @@ TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() in ("true", "1", "yes")
 _GENERATED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_files")
 os.makedirs(_GENERATED_DIR, exist_ok=True)
 
-# 配置相关路由仅允许本机访问（防止局域网用户窃取 API Key）
-LOCAL_ONLY_PREFIXES = ["/config", "/api/config", "/api/configs", "/knowledge", "/plugins", "/api/plugins/upload", "/mcp", "/api/mcp"]
+# 配置相关路由仅允许本机访问（防止局域网用户窃取 API Key、滥用用户管理接口）
+LOCAL_ONLY_PREFIXES = ["/config", "/api/config", "/api/configs", "/knowledge", "/plugins", "/api/plugins/upload", "/mcp", "/api/mcp", "/api/auth/users"]
 
 
 @app.route("/api/export", methods=["POST"])
+@auth_required
 def export_chat():
     """导出聊天记录为指定格式"""
     try:
@@ -86,11 +89,17 @@ def export_chat():
         sid = data.get("sid", "")
         fmt = data.get("format", "md")
 
-        if sid and sid in socket_states:
-            state = socket_states[sid]
-        else:
-            # 尝试从请求参数获取
+        if not sid or sid not in socket_states:
             return {"success": False, "message": "无法获取会话状态"}, 400
+
+        state = socket_states[sid]
+
+        # 认证启用时，验证会话所有权
+        if AUTH_ENABLED:
+            from core.auth import get_current_user
+            current_user = get_current_user()
+            if current_user and state.user_id != current_user.id:
+                return {"success": False, "message": "无权访问该会话"}, 403
 
         messages = state.msg_manager.get_messages()
         if not messages:
@@ -140,6 +149,7 @@ def export_chat():
 
 
 @app.route("/api/stats", methods=["GET"])
+@auth_required
 def get_stats():
     """获取 API 调用统计"""
     try:
@@ -178,7 +188,7 @@ def upload_to_rag():
 
         try:
             content = parse_document(file_path)
-            chunks = add_document(content, source=file.filename)
+            chunks = run_async_in_thread(add_document(content, source=file.filename))
             return {
                 "success": True,
                 "message": f"已添加 {chunks} 个文档块到知识库",
@@ -297,9 +307,6 @@ def restrict_local_only():
 class SocketState:
     """每个 Socket 连接的隔离状态"""
 
-    # 不活跃超时时间（秒）：30 分钟
-    INACTIVE_TIMEOUT = 30 * 60
-
     def __init__(self, sid: str):
         self.sid = sid
         self.user_id: str = ""  # 认证用户 ID
@@ -308,11 +315,6 @@ class SocketState:
         self.fast_mode = True
         self.review_language = "zh"
         self.detected_language: str | None = None  # 自动检测的用户语言（仅第一条消息）
-        # 计划模式状态
-        self.planning_mode = False
-        self.current_plan: dict | None = None  # { title, steps[] }
-        self.current_step_index: int = 0
-        self.plan_results: dict[int, str] = {}  # step_index -> result
         self.last_active = time.time()  # 最后活跃时间戳
 
     def touch(self):
@@ -328,16 +330,13 @@ class SocketState:
     def reset_session(self):
         """切/新/删会话时重置 per-socket 瞬态字段。
 
-        否则 detected_language/current_plan/plan_results 会从前一会话沿用,
+        否则 detected_language 会从前一会话沿用,
         流式回调也可能继续把 token_chunk 打到新会话。
         """
         set_stop(self.sid)
         clear_streaming_callback(self.sid)
         self.current_base_response = None
         self.detected_language = None
-        self.current_plan = None
-        self.current_step_index = 0
-        self.plan_results = {}
 
 
 # 按 socket sid 存储的隔离状态
@@ -349,8 +348,7 @@ socket_configs = {}
 _socket_configs_lock = threading.Lock()
 
 # 全局预编译的图（图本身不区分 socket，Agent 函数通过 sid 获取配置）
-coordination_graph = None   # coordinator -> researcher(optional) -> responder
-fast_graph = None           # 快速模式：直接 responder
+fast_graph = None           # 快速模式：并行搜索 → Responder
 
 
 def get_socket_state(sid: str) -> SocketState:
@@ -387,7 +385,7 @@ def _cleanup_inactive_sockets():
         inactive_sids = []
         with _socket_states_lock:
             for sid, state in socket_states.items():
-                if now - state.last_active > SocketState.INACTIVE_TIMEOUT:
+                if now - state.last_active > SOCKET_INACTIVE_TIMEOUT:
                     inactive_sids.append(sid)
         for sid in inactive_sids:
             cleanup_socket(sid)
@@ -421,7 +419,7 @@ def init_agents():
     Graph 是无状态的(运行时通过 sid 取 LLM 配置),memory store 自带
     `_initialized` 守卫;重复 init 等于浪费 30s embedder 预热。
     """
-    global coordination_graph, fast_graph, _agents_initialized
+    global fast_graph, _agents_initialized
 
     # double-checked: 已初始化时跳过 lock,避免每次连接都进 contended path
     if _agents_initialized:
@@ -431,11 +429,9 @@ def init_agents():
         if _agents_initialized:
             return
 
-        # 始终编译两种图，运行时根据 socket 的 fast_mode 选择
-        coordinator, researcher, responder, reviewer = create_agents(language="zh", fast_mode=False)
-        coordination_graph = create_coordination_graph(coordinator, researcher, tool_caller_node, responder)
-        # 快速模式：并行 WebSearcher + MemorySearcher + ToolCaller → Responder
-        fast_graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder)
+        # 只编译快速模式图：单 Responder 节点，搜索在 responder 内部异步处理
+        _, _, responder, _ = create_agents(language="zh", fast_mode=True)
+        fast_graph = create_fast_graph(responder)
 
         logger.info("Agent graphs initialized")
 
@@ -551,22 +547,49 @@ def _send_history(sid: str):
 
 # ===== SocketIO Events =====
 
+def socketio_auth_required(handler):
+    """SocketIO 事件处理器认证装饰器。
+
+    当 AUTH_ENABLED 为 True 时，检查 socket 状态中的 user_id 是否有效。
+    未认证时断开连接并返回错误。
+    """
+    @functools.wraps(handler)
+    def wrapper(*args, **kwargs):
+        sid = request.sid
+        if AUTH_ENABLED:
+            state = get_socket_state(sid)
+            if not state.user_id:
+                emit("error", {"message": "认证失败，请先提供有效的 API Key"})
+                socketio.disconnect(sid)
+                return None
+        return handler(*args, **kwargs)
+    return wrapper
+
+
 @socketio.on("connect")
-def on_connect():
+def on_connect(auth):
+    # Socket.IO 5 握手:客户端 io({ auth: { api_key } }) 把凭证放进 auth 字典,
+    # 不走 query string,避免 api_key 进访问日志/Referer。保留 query 兜底,
+    # 旧客户端升级期间不会被一刀切踢掉。
     sid = request.sid
     logger.info(f"Client connected: sid={sid}")
 
-    # 如果启用认证，尝试从 query 参数获取 api_key
     if AUTH_ENABLED:
-        api_key = request.args.get("api_key", "").strip()
-        if api_key:
-            user = authenticate(api_key)
-            if user:
-                state = get_socket_state(sid)
-                state.set_user_id(user.id)
-                logger.info(f"User authenticated: {user.name} (id={user.id})")
-            else:
-                logger.warning(f"Invalid api_key from sid={sid}")
+        api_key = ""
+        if auth and isinstance(auth, dict):
+            api_key = (auth.get("api_key") or "").strip()
+        if not api_key:
+            api_key = request.args.get("api_key", "").strip()
+        if not api_key:
+            logger.warning(f"Connection rejected: no api_key from sid={sid}")
+            return False
+        user = authenticate(api_key, ip=request.remote_addr or "")
+        if not user:
+            logger.warning(f"Connection rejected: invalid api_key from sid={sid}")
+            return False
+        state = get_socket_state(sid)
+        state.set_user_id(user.id)
+        logger.info(f"User authenticated: {user.name} (id={user.id})")
 
     emit("status", {"message": "Connected to 凯伦"})
     emit("auth_status", {"enabled": AUTH_ENABLED})
@@ -574,6 +597,7 @@ def on_connect():
 
 
 @socketio.on("send_message")
+@socketio_auth_required
 def handle_message(data):
     """处理用户消息"""
     sid = request.sid
@@ -636,60 +660,38 @@ def handle_message(data):
     state.msg_manager.add_human_message(user_message)
 
     try:
-        if state.planning_mode:
-            run_async_in_thread(_async_handle_planning(
-                sid, user_message, expected_session_id
-            ))
-        else:
-            run_async_in_thread(_async_handle_message(
-                sid, user_message, document_context, expected_session_id
-            ))
+        run_async_in_thread(_async_handle_message(
+            sid, user_message, document_context, expected_session_id
+        ))
     except Exception as e:
         logger.exception(f"Error handling message from sid={sid}")
         emit("error", {"message": str(e)})
-    finally:
         set_current_llm_config(None, sid)
         clear_streaming_callback(sid)
-
-
-def _emit_agent_reset(fast_mode: bool, sid: str = ""):
-    """发送 Agent 空闲状态到前端"""
-    try:
-        if fast_mode:
-            # 快速/计划模式：并行 WebSearcher + MemorySearcher → Responder
-            socketio.emit("agent_finish", {"agent": "web_searcher", "message": "空闲"}, room=sid)
-            socketio.emit("agent_finish", {"agent": "memory_searcher", "message": "空闲"}, room=sid)
-            socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
-        else:
-            # 协调模式：Coordinator → Researcher → Responder
-            socketio.emit("agent_finish", {"agent": "coordinator", "message": "空闲"}, room=sid)
-            socketio.emit("agent_finish", {"agent": "researcher", "message": "空闲"}, room=sid)
-            socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
-    except Exception:
-        pass
 
 
 def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None,
                        expected_session_id: str, call_start: float):
     """记录 API 调用统计"""
     try:
-        from core.config import get_provider, get_model_name
         duration_ms = int((time.time() - call_start) * 1000)
-        provider = get_provider()
-        model = get_model_name()
+        provider, model = get_llm_provider_model(sid)
+        # 提取响应内容（防御 final_state 为 None 或消息为空）
+        resp_content = ""
+        if final_state and final_state.get("messages"):
+            last_msg = final_state["messages"][-1]
+            resp_content = getattr(last_msg, "content", "") or ""
         # 估算 token 数：优先使用 tiktoken，回退到字符数估算
         try:
             import tiktoken
             enc = tiktoken.get_encoding("cl100k_base")
             all_content = "\n".join(m.content for m in messages_for_llm if hasattr(m, "content"))
             prompt_tokens = len(enc.encode(all_content))
-            resp_content = final_state["messages"][-1].content if final_state else ""
             completion_tokens = len(enc.encode(resp_content))
         except Exception:
             # 回退：粗略估算（1 token ≈ 3 字符）
             all_content = "\n".join(m.content for m in messages_for_llm if hasattr(m, "content"))
             prompt_tokens = len(all_content) // 3
-            resp_content = final_state["messages"][-1].content if final_state else ""
             completion_tokens = len(resp_content) // 3
         status = "stopped" if is_stopped(sid) else "success"
         record = CallRecord(
@@ -735,7 +737,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     - 快速/计划模式：并行 2 个搜索子 Agent（联网 + 记忆）
     - 协调模式：并行 3 个搜索子 Agent（联网 + 记忆 + 知识库）
     """
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import HumanMessage, AIMessage
     state = get_socket_state(sid)
 
     # 获取历史消息（快速模式保留 5 轮，协调模式 10 轮）
@@ -766,8 +768,8 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 传给 LLM 的消息列表（历史 + 当前）
     messages_for_llm = messages + [current_msg]
 
-    # 确定当前模式，供 Researcher 节点内的搜索子 Agent 使用
-    current_mode = "planning" if state.planning_mode else ("fast" if state.fast_mode else "coordination")
+    # 当前模式固定为快速模式
+    current_mode = "fast"
 
     initial_state = {
         "messages": messages_for_llm,
@@ -786,72 +788,86 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         "awaiting_review": True
     }
 
-    # 根据 socket 的 fast_mode 选择图
-    graph = fast_graph if state.fast_mode else coordination_graph
+    # 始终使用快速模式图
+    graph = fast_graph
 
     # 安全 emit：后台线程中请求上下文可能丢失，使用 socketio.emit 代替
     def _safe_emit(event, data):
         try:
+            # 检查 socket 是否仍然活跃（避免断开后仍尝试 emit）
+            with _socket_states_lock:
+                if sid not in socket_states:
+                    return
             socketio.emit(event, data, room=sid)
         except Exception as e:
             logger.debug(f"Failed to emit {event} to {sid}: {e}")
 
-    # 根据模式显示不同的思考状态提示
-    if state.fast_mode:
-        _safe_emit("thinking", {"message": "正在思考..."})
-    else:
-        _safe_emit("thinking", {"message": "Coordinator 正在分析需求..."})
+    # token 流中的 emit 包装（复用 _safe_emit 的 sid 检查）
+    def _safe_emit_token(event, data):
+        _safe_emit(event, data)
 
-    # 设置流式输出回调：直接发送每个 token，零延迟
+    # 设置流式输出回调：只在收到第一个 token 时才创建消息气泡
     _stream_started = False
+    # 服务端 token 批处理:凑齐 TOKEN_FLUSH_CHARS 个字符再 emit,减少 socketio 帧数
+    _token_pending: list[str] = []
+    _token_pending_chars = [0]  # 用 list 让闭包内可修改
+
+    def _flush_pending_tokens():
+        if not _token_pending:
+            return
+        combined = "".join(_token_pending)
+        _token_pending.clear()
+        _token_pending_chars[0] = 0
+        if combined:
+            _safe_emit_token("token_chunk", {"token": combined})
 
     def on_token_chunk(token: str):
         nonlocal _stream_started
         if not _stream_started:
             _stream_started = True
-            socketio.emit("stream_start", {"agent": "responder"}, room=sid)
-        if token:
-            socketio.emit("token_chunk", {"token": token}, room=sid)
-
-    def flush_tokens():
-        pass  # 实时发送无需 flush
+            _safe_emit_token("stream_start", {"agent": "responder"})
+        if not token:
+            return
+        _token_pending.append(token)
+        _token_pending_chars[0] += len(token)
+        if _token_pending_chars[0] >= TOKEN_FLUSH_CHARS:
+            _flush_pending_tokens()
 
     set_streaming_callback(on_token_chunk, sid)
+
+    # 立刻给前端一个"正在思考"指示，让用户在等待首个 token 期间看到反馈
+    # stream_start 触发时前端会自动清掉这个指示
+    _safe_emit("thinking", {"message": "正在思考..."})
 
     final_state = None
     call_start = time.time()
 
     # === 执行图（核心逻辑，用 try/except 包裹）===
     # 所有模式统一走 LangGraph：Coordinator → Researcher(并行搜索) → Responder
+    # 整体超时见模块级 GRAPH_TIMEOUT
     try:
-        async for event in graph.astream(initial_state):
-            if is_stopped(sid):
-                break
-            for node_name, node_output in event.items():
-                if node_name == "coordinator":
-                    _safe_emit("agent_start", {"agent": "coordinator", "message": "分析需求中..."})
-                elif node_name == "researcher":
-                    # 协调模式才有 coordinator
-                    if "coordinator" in event:
-                        _safe_emit("agent_finish", {"agent": "coordinator", "message": "分析完成"})
-                    _safe_emit("agent_start", {"agent": "researcher", "message": "调研中..."})
-                elif node_name in ("web_searcher", "memory_searcher"):
-                    # 快速/计划模式的并行搜索子 Agent
-                    agent_label = "联网搜索" if node_name == "web_searcher" else "记忆检索"
-                    _safe_emit("agent_start", {"agent": node_name, "message": f"{agent_label}中..."})
-                elif node_name == "responder":
-                    # 完成前置节点
-                    if "researcher" in event:
-                        _safe_emit("agent_finish", {"agent": "researcher", "message": "调研完成"})
-                    if "web_searcher" in event or "memory_searcher" in event:
-                        _safe_emit("agent_finish", {"agent": "search_hub", "message": "搜索完成"})
-                    _safe_emit("agent_start", {"agent": "responder", "message": "生成回答中..."})
-                final_state = node_output
+        async def _run_graph():
+            final = None
+            async for event in graph.astream(initial_state):
+                if is_stopped(sid):
+                    break
+                for node_output in event.values():
+                    final = node_output
+            return final
+
+        final_state = await asyncio.wait_for(_run_graph(), timeout=GRAPH_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(f"Graph execution timed out after {GRAPH_TIMEOUT}s for sid={sid}")
+        clear_streaming_callback(sid)
+        clear_stop(sid)
+        _safe_emit("stream_end", {"message": "⏱️ 响应超时，请重试或简化问题。", "awaiting_review": False})
+        _safe_emit("error", {"message": "⏱️ 响应超时，请重试或简化问题。"})
+        return
     except Exception as e:
         logger.exception(f"Error processing message for sid={sid}")
         clear_streaming_callback(sid)
-        _emit_agent_reset(state.fast_mode, sid)
         clear_stop(sid)
+        _safe_emit("stream_end", {"message": f"❌ 处理出错: {str(e)}", "awaiting_review": False})
         _safe_emit("message_failed", {"message": user_message, "error": str(e)})
         return
 
@@ -861,15 +877,17 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 1. 记录 API 调用统计
     _record_api_stats(sid, messages_for_llm, final_state, expected_session_id, call_start)
 
-    # 3. 重置 Agent 状态
-    _emit_agent_reset(state.fast_mode, sid)
-
     if is_stopped(sid):
+        # 清理流式占位符，避免用户看到未完成的"正在搜索..."
+        if _stream_started:
+            _safe_emit("stream_end", {"message": "（生成已停止）", "awaiting_review": False})
         _safe_emit("generation_stopped", {"message": "生成已停止"})
         return
 
     if final_state is None:
         clear_streaming_callback(sid)
+        if _stream_started:
+            _safe_emit("stream_end", {"message": "未生成回复", "awaiting_review": False})
         _safe_emit("error", {"message": "No response generated"})
         return
 
@@ -881,52 +899,59 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         logger.info(f"Session changed during generation, discarding result for sid={sid}")
         return
 
-    base_response = final_state["messages"][-1].content
+    # 提取 AI 回复：从后往前找最后一条 AIMessage（Responder 的输出）
+    base_response = ""
+    for msg in reversed(final_state.get("messages", [])):
+        if isinstance(msg, AIMessage):
+            base_response = msg.content or ""
+            break
+
     state.current_base_response = base_response
+
+    # 仅在有内容或前端已经收到 stream_start 时发结束帧,否则前端会收到孤立 stream_end。
+    if base_response or _stream_started:
+        _flush_pending_tokens()  # 把缓冲区残留 token 先发完，避免最后一段突然出现
+        _safe_emit("stream_end", {"message": base_response, "awaiting_review": True})
+    else:
+        _safe_emit("error", {"message": "No response generated"})
 
     # 避免保存空响应到历史记录
     if base_response:
         state.msg_manager.add_agent_message(base_response, "base_model")
 
-    # === 保存对话记忆到自适应记忆系统 ===
+    # === 保存对话记忆到自适应记忆系统（后台 fire-and-forget，不阻塞 UI） ===
     # source=session_id 是为了让 delete_session 能 cascade 清掉本会话的记忆,
     # 不影响其他会话。user_id 退到 tags 里保留追踪能力。
     if _MEMORY_SYSTEM_AVAILABLE:
-        try:
-            store = get_memory_store()
-            user_tag = f"user_{state.user_id}" if state.user_id else f"sid_{sid}"
-            # 保存用户输入作为 observation
-            await store.save_memory(
-                content=f"用户说: {user_message}",
-                memory_type="observation",
-                source=expected_session_id,
-                importance=0.4,
-                tags=["user_input", user_tag],
-            )
-            # 保存 AI 回复作为 observation
-            await store.save_memory(
-                content=f"AI回复: {base_response[:500]}",  # 限制长度避免过大
-                memory_type="observation",
-                source=expected_session_id,
-                importance=0.3,
-                tags=["ai_response", user_tag],
-            )
-            logger.debug(f"Conversation memories saved for sid={sid} session={expected_session_id}")
-        except Exception as e:
-            logger.warning(f"Failed to save conversation memory: {e}")
+        async def _save_conversation_memories():
+            try:
+                store = get_memory_store()
+                user_tag = f"user_{state.user_id}" if state.user_id else f"sid_{sid}"
+                # 保存用户输入作为 observation
+                await store.save_memory(
+                    content=f"用户说: {user_message}",
+                    memory_type="observation",
+                    source=expected_session_id,
+                    importance=0.4,
+                    tags=["user_input", user_tag],
+                )
+                # 保存 AI 回复作为 observation
+                await store.save_memory(
+                    content=f"AI回复: {base_response[:500]}",
+                    memory_type="observation",
+                    source=expected_session_id,
+                    importance=0.3,
+                    tags=["ai_response", user_tag],
+                )
+                logger.debug(f"Conversation memories saved for sid={sid} session={expected_session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save conversation memory: {e}")
 
-    # 发送流式结束标记（如果使用了流式输出）
-    if _stream_started:
-        _safe_emit("stream_end", {"message": base_response, "awaiting_review": True})
-    else:
-        # 未使用流式输出（如 fast_mode），一次性发送完整消息
-        _safe_emit("base_response", {
-            "message": base_response,
-            "awaiting_review": True
-        })
+        asyncio.create_task(_save_conversation_memories())
 
 
 @socketio.on("trigger_review")
+@socketio_auth_required
 def handle_review():
     """第二阶段：用户点击检查，让审查者只提供审查意见"""
     sid = request.sid
@@ -947,10 +972,9 @@ def handle_review():
     try:
         run_async_in_thread(_async_handle_review(sid, expected_session_id))
     except Exception as e:
+        set_current_llm_config(None, sid)
         logger.exception(f"Error handling review from sid={sid}")
         emit("error", {"message": str(e)})
-    finally:
-        set_current_llm_config(None, sid)
 
 
 async def _async_handle_review(sid: str, expected_session_id: str):
@@ -970,53 +994,52 @@ async def _async_handle_review(sid: str, expected_session_id: str):
 
     def _safe_emit_review(event, data):
         try:
+            with _socket_states_lock:
+                if sid not in socket_states:
+                    return
             socketio.emit(event, data, room=sid)
         except Exception:
             pass
 
-    _safe_emit_review("agent_start", {
-        "agent": "reviewer",
-        "message": "正在审查..." if state.review_language == "zh" else "Reviewing response..."
-    })
+    try:
+        # 构建审查提示
+        from agents.prompts import build_review_prompt
+        review_prompt = build_review_prompt(user_message, state.current_base_response, state.review_language)
 
-    # 构建审查提示
-    from agents.prompts import build_review_prompt
-    review_prompt = build_review_prompt(user_message, state.current_base_response, state.review_language)
+        # 直接调用 reviewer 节点函数（无需 LangGraph）
+        from agents.llm import get_llm
+        from agents.prompts import get_reviewer_prompt
+        from langchain_core.messages import SystemMessage
 
-    # 直接调用 reviewer 节点函数（无需 LangGraph）
-    from agents.llm import get_llm
-    from agents.prompts import get_reviewer_prompt
-    from langchain_core.messages import SystemMessage
+        llm = get_llm(sid)
+        reviewer_system = get_reviewer_prompt(state.review_language)
+        messages = [SystemMessage(content=reviewer_system)]
+        messages.append(HumanMessage(content=review_prompt))
 
-    llm = get_llm(sid)
-    reviewer_system = get_reviewer_prompt(state.review_language)
-    messages = [SystemMessage(content=reviewer_system)]
-    messages.append(HumanMessage(content=review_prompt))
+        review_result = ""
+        async for chunk in llm.astream(messages):
+            if is_stopped(sid):
+                break
+            if chunk.content:
+                review_result += chunk.content
 
-    review_result = ""
-    async for chunk in llm.astream(messages):
         if is_stopped(sid):
-            break
-        if chunk.content:
-            review_result += chunk.content
+            _safe_emit_review("generation_stopped", {"message": "生成已停止"})
+            return
 
-    _safe_emit_review("agent_finish", {"agent": "reviewer", "message": "空闲"})
+        # 会话隔离检查
+        if state.msg_manager.get_current_session_id() != expected_session_id:
+            logger.info(f"Session changed during review, discarding result for sid={sid}")
+            return
 
-    if is_stopped(sid):
-        _safe_emit_review("generation_stopped", {"message": "生成已停止"})
-        return
+        _safe_emit_review("review_complete", {
+            "review_result": review_result or "No review available",
+            "original_response": state.current_base_response
+        })
 
-    # 会话隔离检查
-    if state.msg_manager.get_current_session_id() != expected_session_id:
-        logger.info(f"Session changed during review, discarding result for sid={sid}")
-        return
-
-    _safe_emit_review("review_complete", {
-        "review_result": review_result or "No review available",
-        "original_response": state.current_base_response
-    })
-
-    state.current_base_response = None
+        state.current_base_response = None
+    finally:
+        set_current_llm_config(None, sid)
 
 
 def _create_new_session(sid: str, state):
@@ -1030,6 +1053,7 @@ def _create_new_session(sid: str, state):
 
 
 @socketio.on("clear_history")
+@socketio_auth_required
 def handle_clear():
     """新建对话"""
     sid = request.sid
@@ -1037,6 +1061,7 @@ def handle_clear():
 
 
 @socketio.on("new_session")
+@socketio_auth_required
 def handle_new_session():
     """新建会话"""
     sid = request.sid
@@ -1044,6 +1069,7 @@ def handle_new_session():
 
 
 @socketio.on("switch_session")
+@socketio_auth_required
 def handle_switch_session(data):
     """切换会话"""
     sid = request.sid
@@ -1061,6 +1087,7 @@ def handle_switch_session(data):
 
 
 @socketio.on("delete_session")
+@socketio_auth_required
 def handle_delete_session(data):
     """删除会话"""
     sid = request.sid
@@ -1091,6 +1118,7 @@ def handle_delete_session(data):
 
 
 @socketio.on("get_sessions")
+@socketio_auth_required
 def handle_get_sessions():
     """获取所有会话列表"""
     sid = request.sid
@@ -1101,6 +1129,7 @@ def handle_get_sessions():
 
 
 @socketio.on("get_model_info")
+@socketio_auth_required
 def handle_get_model_info():
     sid = request.sid
     cfg = None
@@ -1136,6 +1165,7 @@ def handle_get_model_info():
 
 
 @socketio.on("get_available_models")
+@socketio_auth_required
 def handle_get_available_models():
     """获取可用的模型列表"""
     import requests
@@ -1183,6 +1213,7 @@ def format_size(bytes_size):
 
 
 @socketio.on("set_model")
+@socketio_auth_required
 def handle_set_model(data):
     """切换模型"""
     model_name = data.get("model", "")
@@ -1190,9 +1221,27 @@ def handle_set_model(data):
         emit("error", {"message": "Invalid model name"})
         return
 
+    sid = request.sid
     try:
-        import os
-        os.environ["LLM_MODEL_NAME"] = model_name
+        # 更新当前 socket 的配置，而不是全局环境变量
+        with _socket_configs_lock:
+            cfg = socket_configs.get(sid)
+            if cfg:
+                cfg["model"] = model_name
+                provider = cfg.get("provider", "ollama")
+                cfg["name"] = f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}"
+            else:
+                # 如果 socket 没有配置，使用当前默认 provider 创建新配置
+                from core.config import get_provider
+                provider = get_provider()
+                socket_configs[sid] = {
+                    "provider": provider,
+                    "model": model_name,
+                    "apiKey": "",
+                    "baseUrl": BASE_URLS.get(provider, ""),
+                    "name": f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}"
+                }
+
         clear_llm_cache()
         init_agents()
 
@@ -1206,6 +1255,7 @@ def handle_set_model(data):
 
 
 @socketio.on("activate_config")
+@socketio_auth_required
 def handle_activate_config(data):
     """通过 Socket 切换活跃配置"""
     config_id = data.get("configId", "")
@@ -1236,6 +1286,7 @@ def handle_activate_config(data):
 
 
 @socketio.on("get_configs")
+@socketio_auth_required
 def handle_get_configs():
     """获取所有配置列表"""
     configs = list_configs()
@@ -1247,6 +1298,7 @@ def handle_get_configs():
 
 
 @socketio.on("stop_generation")
+@socketio_auth_required
 def handle_stop_generation():
     """用户请求停止生成"""
     sid = request.sid
@@ -1255,42 +1307,30 @@ def handle_stop_generation():
 
 
 def _get_mode(state: SocketState) -> str:
-    """根据 fast_mode 和 planning_mode 返回统一的模式名称"""
-    if state.planning_mode:
-        return "planning"
-    if state.fast_mode:
-        return "fast"
-    return "coordination"
+    """返回模式名称（固定为快速模式）"""
+    return "fast"
 
 
 @socketio.on("set_mode")
+@socketio_auth_required
 def handle_set_mode(data):
-    """统一切换工作模式：协调 / 快速 / 计划"""
+    """模式切换（固定为快速模式，忽略其他模式请求）"""
     sid = request.sid
     state = get_socket_state(sid)
-    mode = data.get("mode", "coordination")
+    mode = data.get("mode", "fast")
 
-    if mode == "fast":
-        state.fast_mode = True
-        state.planning_mode = False
-        mode_name = "快速模式"
-    elif mode == "planning":
-        state.fast_mode = False
-        state.planning_mode = True
-        mode_name = "计划模式"
-    else:
-        state.fast_mode = False
-        state.planning_mode = False
-        mode_name = "协调模式"
+    state.fast_mode = True
+    mode_name = "快速模式"
 
-    logger.info(f"Mode changed to {mode} for sid={sid}")
+    logger.info(f"Mode set to fast for sid={sid} (requested: {mode})")
     emit("mode_changed", {
-        "mode": mode,
+        "mode": "fast",
         "message": f"已切换到{mode_name}"
     })
 
 
 @socketio.on("get_mode")
+@socketio_auth_required
 def handle_get_mode():
     """获取当前工作模式"""
     sid = request.sid
@@ -1299,6 +1339,7 @@ def handle_get_mode():
 
 
 @socketio.on("set_review_language")
+@socketio_auth_required
 def handle_set_review_language(data):
     """设置审查语言（按 socket 隔离）"""
     sid = request.sid
@@ -1322,6 +1363,7 @@ def handle_set_review_language(data):
 
 
 @socketio.on("set_user_config")
+@socketio_auth_required
 def handle_set_user_config(data):
     """用户设置自己的 LLM 配置（LAN 共享场景，每个用户独立）"""
     sid = request.sid
@@ -1360,312 +1402,6 @@ def handle_set_user_config(data):
     })
 
 
-@socketio.on("confirm_plan")
-def handle_confirm_plan(data):
-    """用户确认计划后开始执行"""
-    sid = request.sid
-    state = get_socket_state(sid)
-
-    if not state.current_plan:
-        emit("error", {"message": "当前没有可执行的计划"})
-        return
-
-    # 用户可能修改了计划，更新
-    user_plan = data.get("plan")
-    if user_plan and isinstance(user_plan, dict) and "steps" in user_plan:
-        state.current_plan = user_plan
-        # 重新编号
-        for i, step in enumerate(state.current_plan.get("steps", []), 1):
-            step["index"] = i
-
-    state.current_step_index = 0
-    state.plan_results = {}
-
-    emit("plan_confirmed", {
-        "plan": state.current_plan,
-        "message": "计划已确认，开始执行"
-    })
-
-    # 自动开始执行第一步
-    clear_stop(sid)
-    expected_session_id = state.msg_manager.get_current_session_id()
-
-    with _socket_configs_lock:
-        user_cfg = socket_configs.get(sid)
-    set_current_llm_config(user_cfg, sid)
-
-    try:
-        run_async_in_thread(_async_execute_plan_step(
-            sid, 0, expected_session_id
-        ))
-    except Exception as e:
-        logger.exception(f"Error starting plan execution for sid={sid}")
-        emit("error", {"message": str(e)})
-    finally:
-        set_current_llm_config(None, sid)
-
-
-@socketio.on("skip_step")
-def handle_skip_step(data):
-    """用户跳过当前步骤"""
-    sid = request.sid
-    state = get_socket_state(sid)
-
-    if not state.current_plan:
-        emit("error", {"message": "当前没有正在执行的计划"})
-        return
-
-    step_index = data.get("step_index", state.current_step_index)
-    steps = state.current_plan.get("steps", [])
-
-    if step_index >= len(steps):
-        emit("error", {"message": "步骤索引超出范围"})
-        return
-
-    emit("plan_step_skipped", {
-        "step_index": step_index,
-        "step_title": steps[step_index].get("title", ""),
-        "message": f"已跳过步骤 {step_index + 1}"
-    })
-
-    # 继续执行下一步
-    state.current_step_index = step_index + 1
-    if state.current_step_index >= len(steps):
-        _finish_plan(sid)
-        return
-
-    clear_stop(sid)
-    expected_session_id = state.msg_manager.get_current_session_id()
-
-    with _socket_configs_lock:
-        user_cfg = socket_configs.get(sid)
-    set_current_llm_config(user_cfg, sid)
-
-    try:
-        run_async_in_thread(_async_execute_plan_step(
-            sid, state.current_step_index, expected_session_id
-        ))
-    except Exception as e:
-        logger.exception(f"Error skipping step for sid={sid}")
-        emit("error", {"message": str(e)})
-    finally:
-        set_current_llm_config(None, sid)
-
-
-@socketio.on("cancel_plan")
-def handle_cancel_plan():
-    """用户取消当前计划"""
-    sid = request.sid
-    state = get_socket_state(sid)
-
-    state.current_plan = None
-    state.current_step_index = 0
-    state.plan_results = {}
-    set_stop(sid)
-
-    emit("plan_cancelled", {"message": "计划已取消"})
-
-
-async def _async_handle_planning(sid: str, user_message: str, expected_session_id: str):
-    """计划模式：生成任务计划"""
-    state = get_socket_state(sid)
-    from langchain_core.messages import HumanMessage
-
-    emit("thinking", {"message": "Planner 正在分析需求并制定计划..."})
-    emit("agent_start", {"agent": "planner", "message": "制定计划中..."})
-
-    # 构建 Planner 输入
-    plan_prompt = (
-        f"请为以下需求制定一个详细的执行计划：\n\n"
-        f"{user_message}\n\n"
-        f"请分析需求并输出 JSON 格式的任务计划。"
-    )
-
-    plan_state = {
-        "messages": [HumanMessage(content=plan_prompt, name="Human")],
-    }
-
-    try:
-        result = await planner_node(plan_state, sid=sid)
-        planner_msg = result["messages"][-1]
-        plan_text = planner_msg.content
-
-        plan = parse_plan_from_response(plan_text)
-        if not plan or "steps" not in plan:
-            logger.warning(f"Failed to parse plan from response for sid={sid}")
-            emit("error", {"message": "计划解析失败，请重试或用更明确的描述"})
-            emit("agent_finish", {"agent": "planner", "message": "空闲"})
-            return
-
-        # 确保步骤有正确的 index
-        for i, step in enumerate(plan.get("steps", []), 1):
-            step["index"] = i
-
-        state.current_plan = plan
-        state.current_step_index = 0
-        state.plan_results = {}
-
-        # 保存用户消息到数据库
-        state.msg_manager.add_human_message(user_message)
-
-        emit("plan_generated", {
-            "title": plan.get("title", "任务计划"),
-            "steps": plan.get("steps", []),
-            "message": f"已生成计划：{plan.get('title', '任务计划')}，共 {len(plan.get('steps', []))} 个步骤"
-        })
-        emit("agent_finish", {"agent": "planner", "message": "空闲"})
-
-    except Exception as e:
-        logger.exception(f"Error generating plan for sid={sid}")
-        emit("error", {"message": f"计划生成失败: {str(e)}"})
-        emit("agent_finish", {"agent": "planner", "message": "空闲"})
-
-
-async def _async_execute_plan_step(sid: str, step_index: int, expected_session_id: str):
-    """执行计划中的某一步"""
-    state = get_socket_state(sid)
-
-    if not state.current_plan or step_index >= len(state.current_plan.get("steps", [])):
-        return
-
-    steps = state.current_plan["steps"]
-    step = steps[step_index]
-
-    emit("plan_step_started", {
-        "step_index": step_index,
-        "step_title": step.get("title", ""),
-        "message": f"正在执行步骤 {step_index + 1}/{len(steps)}：{step.get('title', '')}"
-    })
-    emit("agent_start", {"agent": "coordinator", "message": f"执行步骤 {step_index + 1}..."})
-
-    from langchain_core.messages import HumanMessage
-
-    # 构建步骤执行任务
-    step_prompt = (
-        f"当前执行计划第 {step_index + 1} 步：{step.get('title', '')}\n"
-        f"步骤描述：{step.get('description', '')}\n\n"
-        f"请完成这个步骤的任务。如果需要研究或搜索信息，请先进行研究。"
-    )
-
-    # 获取历史消息（用于上下文）
-    messages = list(state.msg_manager.get_messages_for_model(max_turns=5))
-    current_msg = HumanMessage(content=step_prompt, name="Human")
-    messages_for_llm = messages + [current_msg]
-
-    initial_state = {
-        "messages": messages_for_llm,
-        "active_agent": None,
-        "task_context": {
-            "user_input": step_prompt,
-            "step_index": step_index,
-            "detected_language": state.detected_language,
-            "user_id": state.user_id,
-            "session_id": expected_session_id,
-            "mode": "planning",
-        },
-        "human_input_required": False,
-        "base_model_response": None,
-        "review_result": None,
-        "awaiting_review": False,
-    }
-
-    graph = coordination_graph  # 计划模式始终使用协调图
-    final_state = None
-
-    def _safe_emit_plan(event, data):
-        try:
-            socketio.emit(event, data, room=sid)
-        except Exception:
-            pass
-
-    try:
-        async for event in graph.astream(initial_state):
-            if is_stopped(sid):
-                break
-            for node_name, node_output in event.items():
-                if node_name == "coordinator":
-                    _safe_emit_plan("agent_start", {"agent": "coordinator", "message": "分析步骤需求..."})
-                elif node_name == "researcher":
-                    _safe_emit_plan("agent_finish", {"agent": "coordinator", "message": "分析完成"})
-                    _safe_emit_plan("agent_start", {"agent": "researcher", "message": "调研中..."})
-                elif node_name == "responder":
-                    if "researcher" in event:
-                        _safe_emit_plan("agent_finish", {"agent": "researcher", "message": "调研完成"})
-                    _safe_emit_plan("agent_start", {"agent": "responder", "message": "生成结果..."})
-                final_state = node_output
-    except Exception as e:
-        logger.exception(f"Error executing plan step {step_index} for sid={sid}")
-        _emit_agent_reset(False, sid)
-        clear_stop(sid)
-        _safe_emit_plan("plan_step_error", {
-            "step_index": step_index,
-            "error": str(e),
-            "message": f"步骤 {step_index + 1} 执行失败"
-        })
-        return
-
-    _emit_agent_reset(False, sid)
-
-    if is_stopped(sid):
-        emit("generation_stopped", {"message": "生成已停止"})
-        return
-
-    if final_state is None:
-        emit("error", {"message": "步骤执行未产生结果"})
-        return
-
-    # 会话隔离检查
-    if state.msg_manager.get_current_session_id() != expected_session_id:
-        logger.info(f"Session changed during plan step, discarding result for sid={sid}")
-        return
-
-    step_result = final_state["messages"][-1].content
-    state.plan_results[step_index] = step_result
-
-    # 将步骤结果保存到消息历史
-    state.msg_manager.add_agent_message(
-        f"【步骤 {step_index + 1}】{step.get('title', '')}\n\n{step_result}",
-        "base_model"
-    )
-
-    # 自动标记步骤完成（AI 打勾）
-    emit("plan_step_completed", {
-        "step_index": step_index,
-        "step_title": step.get("title", ""),
-        "result": step_result,
-        "message": f"步骤 {step_index + 1}/{len(steps)} 已完成 ✅"
-    })
-
-    # 继续执行下一步
-    state.current_step_index = step_index + 1
-    if state.current_step_index >= len(steps):
-        _finish_plan(sid)
-        return
-
-    # 执行下一步（无延迟，连续执行提高效率）
-    await _async_execute_plan_step(sid, state.current_step_index, expected_session_id)
-
-
-def _finish_plan(sid: str):
-    """计划全部完成后生成总结"""
-    state = get_socket_state(sid)
-
-    if not state.current_plan:
-        return
-
-    steps = state.current_plan.get("steps", [])
-    emit("plan_completed", {
-        "title": state.current_plan.get("title", "任务计划"),
-        "total_steps": len(steps),
-        "completed_steps": len(state.plan_results),
-        "message": f"🎉 计划全部完成！共 {len(steps)} 个步骤"
-    })
-
-    # 清空当前计划，但保留 planning_mode 为 True 以便继续
-    state.current_plan = None
-    state.current_step_index = 0
-    state.plan_results = {}
-
 
 @socketio.on("disconnect")
 def handle_disconnect():
@@ -1680,10 +1416,28 @@ if __name__ == "__main__":
     init_agents()
     start_socket_cleanup()
     print("Agents initialized!")
-    print("Starting Flask server at http://0.0.0.0:5000")
-    print("Local access: http://127.0.0.1:5000")
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+
+    # 预热 LLM 连接 — 提前建立 TCP/TLS,减少首 token 延迟。
+    # 失败不阻塞启动(如 API Key 未配置时)。
+    try:
+        import asyncio
+        from agents.llm import warmup_connection
+        asyncio.run(warmup_connection())
+    except Exception as e:
+        print(f"Connection warmup skipped: {e}")
+
+    # 默认仅绑定 127.0.0.1。设置 BIND_HOST=0.0.0.0 才会监听局域网
+    bind_host = os.getenv("BIND_HOST", "127.0.0.1")
+    bind_port = int(os.getenv("PORT", "5000"))
+    debug_mode = os.getenv("FLASK_DEBUG", "false").lower() in ("true", "1", "yes")
+    print(f"Starting Flask server at http://{bind_host}:{bind_port}")
+    print(f"Local access: http://127.0.0.1:{bind_port}")
+    socketio.run(app, host=bind_host, port=bind_port, debug=debug_mode)
 
 
 from web.api import api_bp
 app.register_blueprint(api_bp)
+
+# 模块加载时即触发 Agent 图编译与记忆系统后台预热，
+# 确保 WSGI 入口(gunicorn 等)和 __main__ 入口行为一致。
+init_agents()

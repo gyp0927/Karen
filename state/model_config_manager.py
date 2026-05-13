@@ -189,3 +189,7 @@ def sync_to_env(config: dict):
 
     with open(env_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
+    try:
+        os.chmod(env_path, 0o600)
+    except Exception:
+        pass

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -52,13 +53,16 @@ except Exception as _e:  # pragma: no cover
 # Singleton storage – one global store per process
 # ---------------------------------------------------------------------------
 _store_instance: AgentMemoryStore | None = None
+_store_lock = threading.Lock()
 
 
 def get_memory_store() -> AgentMemoryStore:
     """Return the global memory store singleton."""
     global _store_instance
     if _store_instance is None:
-        _store_instance = AgentMemoryStore()
+        with _store_lock:
+            if _store_instance is None:
+                _store_instance = AgentMemoryStore()
     return _store_instance
 
 

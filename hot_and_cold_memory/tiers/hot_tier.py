@@ -99,7 +99,7 @@ class HotTier(BaseTier):
                 memory_type=memory_type,
                 source=source,
                 access_count=0,
-                frequency_score=1.0,  # New memories start hot
+                frequency_score=0.5,  # New memories start with neutral frequency
                 created_at=now,
                 updated_at=now,
                 tags=memory.tags or [],

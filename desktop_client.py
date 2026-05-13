@@ -19,7 +19,7 @@ os.chdir(app_dir)
 
 
 def check_and_install_deps():
-    """检查并安装缺失的依赖"""
+    """检查依赖是否已安装，缺失时提示用户手动安装。"""
     required = {
         "flask": "flask>=3.0.0",
         "flask_socketio": "flask-socketio>=5.3.0",
@@ -37,38 +37,26 @@ def check_and_install_deps():
             missing.append(pkg)
 
     if missing:
-        print("[INFO] Installing missing dependencies...")
-        print(f"[INFO] Packages: {missing}")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet"] + missing)
-            print("[INFO] Dependencies installed successfully.")
-        except Exception as e:
-            print(f"[ERROR] Failed to install dependencies: {e}")
-            print("[ERROR] Please run: pip install -r requirements.txt")
-            input("Press Enter to exit...")
-            sys.exit(1)
+        print("[ERROR] 缺少以下依赖，请手动安装:")
+        for pkg in missing:
+            print(f"  - {pkg}")
+        print("[INFO] 运行: pip install -r requirements.txt")
+        input("按 Enter 退出...")
+        sys.exit(1)
 
     # 检查 numpy (optional, for RAG)
     try:
         import numpy  # noqa
     except ImportError:
-        print("[INFO] Installing numpy (required for RAG knowledge base)...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "numpy"])
-            print("[INFO] numpy installed.")
-        except Exception:
-            print("[WARN] numpy installation failed. RAG features will be disabled.")
+        print("[WARN] 缺少 numpy，RAG 知识库功能将被禁用。")
+        print("[INFO] 运行: pip install numpy 以启用该功能。")
 
     # 检查 mcp (optional, for MCP servers)
     try:
         import mcp  # noqa
     except ImportError:
-        print("[INFO] Installing mcp (required for MCP tool integration)...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "mcp>=1.20.0"])
-            print("[INFO] mcp installed.")
-        except Exception:
-            print("[WARN] mcp installation failed. MCP features will be disabled.")
+        print("[WARN] 缺少 mcp，MCP 工具集成功能将被禁用。")
+        print("[INFO] 运行: pip install 'mcp>=1.20.0' 以启用该功能。")
 
 
 check_and_install_deps()
@@ -106,7 +94,7 @@ def cleanup_lock():
     try:
         if os.path.exists(lock_file):
             os.remove(lock_file)
-    except:
+    except Exception:
         pass
 
 
@@ -140,7 +128,7 @@ def start_flask_server(port):
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
 
-    # 使用 threading 模式（与现有 socketio 配置一致）
+    # 使用 threading 模式（Socket.IO 走长轮询，token 流式照常工作）
     from flask_socketio import SocketIO
     from web.app import socketio
     socketio.run(app, host="127.0.0.1", port=port, debug=False, use_reloader=False)
@@ -160,10 +148,13 @@ def main():
     # 单实例检查
     if not check_single_instance():
         if is_port_in_use():
-            print("检测到已有实例在运行")
+            print("检测到已有实例在运行，退出...")
+            sys.exit(0)
         else:
             cleanup_lock()
-            check_single_instance()
+            if not check_single_instance():
+                print("检测到已有实例在运行，退出...")
+                sys.exit(0)
 
     atexit.register(cleanup_lock)
 
@@ -188,15 +179,39 @@ def main():
 
     print(f"[Client] Server ready at http://127.0.0.1:{port}")
 
-    # 清除 WebView2 缓存，确保前端更新生效
-    import shutil
+    # WebView2 缓存策略:按 script.js 哈希命中。
+    # 旧实现每次启动都 rmtree 整个缓存,前端没改也会清空 cookie/localStorage,
+    # 用户每次启动都得重新登录。改成仅当前端 JS 变化时才清。
+    import hashlib
     webview_data_dir = os.path.join(os.getenv("LOCALAPPDATA", ""), "Karen", "WebView2")
-    if os.path.exists(webview_data_dir):
+    script_path = os.path.join(app_dir, "web", "static", "script.js")
+    hash_file = os.path.join(webview_data_dir, ".script_hash")
+    try:
+        with open(script_path, "rb") as f:
+            current_hash = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        current_hash = ""
+    cached_hash = ""
+    if os.path.exists(hash_file):
+        try:
+            with open(hash_file, "r", encoding="utf-8") as f:
+                cached_hash = f.read().strip()
+        except OSError:
+            pass
+    if current_hash and current_hash != cached_hash and os.path.exists(webview_data_dir):
+        import shutil
         try:
             shutil.rmtree(webview_data_dir)
-            print(f"[Client] Cleared WebView2 cache: {webview_data_dir}")
+            print(f"[Client] script.js changed, cleared WebView2 cache")
         except Exception as e:
             print(f"[Client] Warning: could not clear cache: {e}")
+    os.makedirs(webview_data_dir, exist_ok=True)
+    if current_hash:
+        try:
+            with open(hash_file, "w", encoding="utf-8") as f:
+                f.write(current_hash)
+        except OSError:
+            pass
     os.environ["WEBVIEW2_USER_DATA_FOLDER"] = webview_data_dir
 
     # 启动 WebView 窗口

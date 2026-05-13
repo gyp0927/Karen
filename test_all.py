@@ -1,10 +1,12 @@
 """全功能测试脚本"""
 import asyncio
 import sys
+import threading
 import traceback
+from pathlib import Path
 
 # 设置项目根目录
-sys.path.insert(0, "E:/果冻ai-memory/多agent聊天")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 results = []
 
@@ -34,10 +36,8 @@ async def test_coordination_graph():
 @test("图编译 - 快速模式")
 async def test_fast_graph():
     from graph.orchestrator import create_fast_graph
-    from agents.search import web_searcher_agent, memory_searcher_agent
-    from agents.tools import tool_caller_node
     from agents.nodes import responder_node
-    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node)
+    graph = create_fast_graph(responder_node)
     assert graph is not None
 
 @test("图编译 - 审查模式")
@@ -132,7 +132,13 @@ async def test_memory():
         print("    SKIP: 记忆系统依赖未安装")
         return
     store = get_memory_store()
-    await store.initialize()
+    try:
+        await store.initialize()
+    except RuntimeError as e:
+        if "already accessed by another instance" in str(e):
+            print("    SKIP: Qdrant 存储已被其他实例锁定")
+            return
+        raise
     # 保存记忆
     result = await store.save_memory(
         content="用户喜欢Python编程",
@@ -150,10 +156,10 @@ async def test_memory():
 async def test_rag():
     from core.rag import add_document, search_knowledge, get_knowledge_stats
     # 添加文档
-    chunks = add_document("Python是一种高级编程语言。", source="test_doc")
+    chunks = await add_document("Python是一种高级编程语言。", source="test_doc")
     assert chunks >= 0
     # 搜索
-    result = search_knowledge("Python", top_k=3)
+    result = await search_knowledge("Python", top_k=3)
     assert isinstance(result, str)
     # 统计
     stats = get_knowledge_stats()
@@ -221,12 +227,10 @@ async def test_chat_coordination():
 @test("端到端 - 快速模式")
 async def test_chat_fast():
     from graph.orchestrator import create_fast_graph
-    from agents.search import web_searcher_agent, memory_searcher_agent
-    from agents.tools import tool_caller_node
     from agents.nodes import responder_node
     from langchain_core.messages import HumanMessage
 
-    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node)
+    graph = create_fast_graph(responder_node)
     initial_state = {
         "messages": [HumanMessage(content="你好")],
         "active_agent": None,
@@ -259,6 +263,22 @@ async def main():
     print("凯伦 全功能测试")
     print("=" * 60)
 
+    # ---- 后台预热记忆系统（首次加载 embedding 模型约 10-20s） ----
+    _memory_warmup_done = threading.Event()
+
+    def _bg_memory_warmup():
+        try:
+            from core.memory_client import _MEMORY_SYSTEM_AVAILABLE, get_memory_store
+            if _MEMORY_SYSTEM_AVAILABLE:
+                asyncio.run(get_memory_store().initialize())
+                print("  记忆系统预热完成")
+        except Exception as e:
+            print(f"  记忆系统预热失败: {e}")
+        finally:
+            _memory_warmup_done.set()
+
+    threading.Thread(target=_bg_memory_warmup, daemon=True, name="mem-warmup").start()
+
     tests = [
         test_coordination_graph,
         test_fast_graph,
@@ -280,6 +300,9 @@ async def main():
         test_chat_fast,
     ]
 
+    # 前 6 个测试（图编译 + 节点 + Web 搜索）本身需要时间，
+    # 后台预热线程大概率在 test_memory_searcher 前完成。
+    # 若 embedding 模型尚未加载完毕，memory_searcher_agent 会自动 await initialize()（60s 超时）。
     for t in tests:
         await t()
 

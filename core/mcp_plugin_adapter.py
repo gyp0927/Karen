@@ -5,8 +5,8 @@
 
 import logging
 
-from core.plugin_system import Plugin, plugin_registry
-from core.mcp_manager import get_mcp_manager, list_mcp_tools, call_mcp_tool
+from core.plugin_system import Plugin, get_registry
+from core.mcp_manager import list_mcp_tools, call_mcp_tool
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ def register_mcp_plugins():
     """扫描所有 MCP 服务器，将其工具注册为 Plugin"""
     try:
         tools = list_mcp_tools()
+        registry = get_registry()
         for t in tools:
             plugin = MCPToolPlugin(
                 server_name=t["server"],
@@ -54,11 +55,6 @@ def register_mcp_plugins():
                 description=t.get("description", ""),
                 schema=t.get("schema", {}),
             )
-            # 直接注入到 plugin_registry
-            registry = plugin_registry
-            if registry is None:
-                from core.plugin_system import get_registry
-                registry = get_registry()
             registry._plugins[plugin.name] = plugin
             logger.info(f"Registered MCP tool as plugin: {plugin.name}")
     except Exception as e:

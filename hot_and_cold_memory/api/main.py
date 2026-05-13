@@ -1,5 +1,6 @@
 """FastAPI application factory for Adaptive Memory."""
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -173,9 +174,14 @@ def create_app() -> FastAPI:
     )
 
     # CORS
+    _cors_origins_env = os.environ.get("CORS_ORIGINS", "")
+    if _cors_origins_env:
+        allow_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    else:
+        allow_origins = ["http://localhost", "http://localhost:3000", "http://127.0.0.1:3000"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allow_origins,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],

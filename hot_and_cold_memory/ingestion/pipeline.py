@@ -333,13 +333,10 @@ class MemoryPipeline:
             archive_source = f"memory_archive_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
 
             # 动态导入 RAG 模块，避免循环依赖
-            import asyncio
             try:
                 import importlib
-                rag = importlib.import_module("core.rag")
-                # 用线程池运行同步的 add_document，避免阻塞事件循环
-                archived_count = await asyncio.to_thread(
-                    rag.add_document,
+                rag = importlib.import_module("hot_and_cold_memory.core.rag")
+                archived_count = await rag.add_document(
                     archive_text,
                     source=archive_source,
                 )

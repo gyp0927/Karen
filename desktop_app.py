@@ -17,7 +17,7 @@ os.chdir(app_dir)
 
 
 def check_and_install_deps():
-    """检查并安装缺失的依赖"""
+    """检查依赖是否已安装，缺失时提示用户手动安装。"""
     required = {
         "flask": "flask>=3.0.0",
         "flask_socketio": "flask-socketio>=5.3.0",
@@ -34,38 +34,26 @@ def check_and_install_deps():
             missing.append(pkg)
 
     if missing:
-        print("[INFO] Installing missing dependencies...")
-        print(f"[INFO] Packages: {missing}")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet"] + missing)
-            print("[INFO] Dependencies installed successfully.")
-        except Exception as e:
-            print(f"[ERROR] Failed to install dependencies: {e}")
-            print("[ERROR] Please run: pip install -r requirements.txt")
-            input("Press Enter to exit...")
-            sys.exit(1)
+        print("[ERROR] 缺少以下依赖，请手动安装:")
+        for pkg in missing:
+            print(f"  - {pkg}")
+        print("[INFO] 运行: pip install -r requirements.txt")
+        input("按 Enter 退出...")
+        sys.exit(1)
 
     # 检查 numpy (optional, for RAG)
     try:
         import numpy  # noqa
     except ImportError:
-        print("[INFO] Installing numpy (required for RAG knowledge base)...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "numpy"])
-            print("[INFO] numpy installed.")
-        except Exception:
-            print("[WARN] numpy installation failed. RAG features will be disabled.")
+        print("[WARN] 缺少 numpy，RAG 知识库功能将被禁用。")
+        print("[INFO] 运行: pip install numpy 以启用该功能。")
 
     # 检查 mcp (optional, for MCP servers)
     try:
         import mcp  # noqa
     except ImportError:
-        print("[INFO] Installing mcp (required for MCP tool integration)...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "mcp>=1.20.0"])
-            print("[INFO] mcp installed.")
-        except Exception:
-            print("[WARN] mcp installation failed. MCP features will be disabled.")
+        print("[WARN] 缺少 mcp，MCP 工具集成功能将被禁用。")
+        print("[INFO] 运行: pip install 'mcp>=1.20.0' 以启用该功能。")
 
 
 check_and_install_deps()
@@ -96,7 +84,7 @@ def cleanup_lock():
     try:
         if os.path.exists(lock_file):
             os.remove(lock_file)
-    except:
+    except Exception:
         pass
 
 
@@ -108,9 +96,14 @@ if not check_single_instance():
         webbrowser.open("http://127.0.0.1:5000")
         sys.exit(0)
     else:
-        # 锁文件残留，清理后重新创建
+        # 锁文件残留，清理后重新尝试
         cleanup_lock()
-        check_single_instance()
+        if not check_single_instance():
+            if is_port_in_use():
+                print("检测到已有实例在运行，正在打开浏览器...")
+                import webbrowser
+                webbrowser.open("http://127.0.0.1:5000")
+                sys.exit(0)
 
 # 注册退出时清理锁文件
 import atexit

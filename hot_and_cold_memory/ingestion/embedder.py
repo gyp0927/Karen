@@ -39,7 +39,7 @@ class _LRUCache:
             while len(self._cache) > self.maxsize:
                 self._cache.popitem(last=False)
 
-    async def get_batch(self, texts: list[str]) -> tuple[list[int], list[str]]:
+    async def get_batch(self, texts: list[str]) -> tuple[list[int], list[str], list[int]]:
         """Return (cached_indices, missing_texts) for a batch.
 
         cached_indices maps the original index to the cached vector.

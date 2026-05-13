@@ -106,6 +106,12 @@ class PluginRegistry:
         """从文件加载单个插件模块。"""
         module_name = os.path.splitext(os.path.basename(filepath))[0]
         try:
+            # 安全扫描：先读取文件内容，进行 AST 安全检查
+            with open(filepath, "r", encoding="utf-8") as f:
+                source = f.read()
+            if not self._scan_plugin_ast(source, filepath):
+                return
+
             spec = importlib.util.spec_from_file_location(module_name, filepath)
             if spec is None or spec.loader is None:
                 return
@@ -171,6 +177,70 @@ class PluginRegistry:
         if plugin is None:
             raise ValueError(f"插件 '{name}' 不存在")
         return plugin.execute(args)
+
+    def _scan_plugin_ast(self, source: str, filepath: str) -> bool:
+        """对插件源码进行 AST 安全检查。
+
+        TODO: 添加可选的插件签名/哈希验证机制，防止插件被篡改。
+        当前仅做 AST 静态扫描，不验证文件完整性。
+
+        禁止导入危险模块和调用危险函数。
+        这是最后一道防线——插件仍然运行在宿主进程中。
+        """
+        import ast
+
+        _FORBIDDEN_MODULES = {
+            "os", "sys", "subprocess", "ctypes", "socket",
+            "urllib", "http", "pickle", "marshal", "shutil",
+            "pathlib", "tempfile", "multiprocessing", "builtins",
+            "io", "operator", "inspect", "types", "code", "codeop",
+        }
+        _FORBIDDEN_CALLS = {
+            "eval", "exec", "compile", "open", "input", "__import__",
+            "getattr", "setattr", "delattr", "globals", "locals", "vars",
+            "attrgetter", "itemgetter", "methodcaller",
+        }
+        _FORBIDDEN_ATTRS = {
+            "__class__", "__bases__", "__base__", "__subclasses__",
+            "__mro__", "__globals__", "__builtins__", "__dict__",
+            "__code__", "__closure__", "f_globals", "f_locals",
+        }
+
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as e:
+            logger.warning(f"Plugin syntax error in {filepath}: {e}")
+            return False
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name.split(".")[0] for alias in node.names]
+                else:
+                    mod = (node.module or "").split(".")[0]
+                    names = [mod] if mod else []
+                for name in names:
+                    if name in _FORBIDDEN_MODULES:
+                        logger.warning(f"Plugin {filepath}: forbidden import '{name}'")
+                        return False
+
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    if node.func.id in _FORBIDDEN_CALLS:
+                        logger.warning(f"Plugin {filepath}: forbidden call '{node.func.id}'")
+                        return False
+                elif isinstance(node.func, ast.Attribute):
+                    if node.func.attr in _FORBIDDEN_CALLS:
+                        logger.warning(f"Plugin {filepath}: forbidden call '{node.func.attr}'")
+                        return False
+
+            if isinstance(node, ast.Attribute):
+                if node.attr in _FORBIDDEN_ATTRS:
+                    logger.warning(f"Plugin {filepath}: forbidden attribute '{node.attr}'")
+                    return False
+
+        return True
 
     def get_enabled_plugins_prompt(self) -> str:
         """生成供 Agent 使用的插件列表提示词。"""

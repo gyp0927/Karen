@@ -12,6 +12,16 @@ from werkzeug.utils import secure_filename
 api_bp = Blueprint("api", __name__)
 logger = logging.getLogger(__name__)
 
+# 延迟加载符号（避免循环导入）
+_GENERATED_DIR = None
+
+def _get_generated_dir():
+    global _GENERATED_DIR
+    if _GENERATED_DIR is None:
+        from web.app import _GENERATED_DIR as gd
+        _GENERATED_DIR = gd
+    return _GENERATED_DIR
+
 from core.auth import (
     auth_required, AUTH_ENABLED, create_user, authenticate,
     get_user_by_id, list_users, delete_user, update_user_config,
@@ -89,6 +99,7 @@ def upload_file():
 
 
 @api_bp.route("/api/generate-file", methods=["POST"])
+@auth_required
 def generate_file():
     """根据代码内容生成指定格式的文件"""
     try:
@@ -113,7 +124,7 @@ def generate_file():
         }
         ext = ext_map.get(file_format, file_format)
         full_filename = f"{safe_name}.{ext}"
-        file_path = os.path.join(_GENERATED_DIR, full_filename)
+        file_path = os.path.join(_get_generated_dir(), full_filename)
 
         if file_format == "doc":
             html_wrapper = f"""<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
@@ -146,8 +157,8 @@ def _cleanup_generated_files(max_files=50):
     """清理旧文件，只保留最新的 N 个"""
     try:
         files = []
-        for f in os.listdir(_GENERATED_DIR):
-            path = os.path.join(_GENERATED_DIR, f)
+        for f in os.listdir(_get_generated_dir()):
+            path = os.path.join(_get_generated_dir(), f)
             if os.path.isfile(path):
                 files.append((path, os.path.getmtime(path)))
         if len(files) > max_files:
@@ -159,11 +170,12 @@ def _cleanup_generated_files(max_files=50):
 
 
 @api_bp.route("/api/download/<filename>")
+@auth_required
 def download_file(filename):
     """下载生成的文件"""
     try:
         # 使用 pathlib 进行安全的路径校验
-        base_dir = Path(_GENERATED_DIR).resolve()
+        base_dir = Path(_get_generated_dir()).resolve()
         target = (base_dir / filename).resolve()
 
         # 确保目标在 base_dir 内部（resolve() 会处理 .. 等路径穿越）
@@ -203,6 +215,7 @@ def get_configs():
 
 
 @api_bp.route("/api/configs", methods=["POST"])
+@auth_required
 def save_config_api():
     """保存/新增模型配置"""
     try:
@@ -229,6 +242,7 @@ def save_config_api():
                 if active and active.get("id") == config_id:
                     sync_to_env(active)
                     clear_llm_cache()
+                    from web.app import init_agents
                     init_agents()
                 return {"success": True, "message": "配置已更新", "config": result}
             return {"success": False, "message": "配置不存在"}, 404
@@ -241,6 +255,7 @@ def save_config_api():
                 if active:
                     sync_to_env(active)
                     clear_llm_cache()
+                    from web.app import init_agents
                     init_agents()
             return {"success": True, "message": "配置已保存", "config": result}
     except Exception as e:
@@ -249,6 +264,7 @@ def save_config_api():
 
 
 @api_bp.route("/api/configs/<config_id>", methods=["DELETE"])
+@auth_required
 def delete_config_api(config_id):
     """删除模型配置"""
     try:
@@ -257,6 +273,7 @@ def delete_config_api(config_id):
             if active:
                 sync_to_env(active)
                 clear_llm_cache()
+                from web.app import init_agents
                 init_agents()
             return {"success": True, "message": "配置已删除"}
         return {"success": False, "message": "配置不存在"}, 404
@@ -266,6 +283,7 @@ def delete_config_api(config_id):
 
 
 @api_bp.route("/api/configs/<config_id>/activate", methods=["POST"])
+@auth_required
 def activate_config_api(config_id):
     """激活指定配置"""
     try:
@@ -274,6 +292,7 @@ def activate_config_api(config_id):
             if active:
                 sync_to_env(active)
                 clear_llm_cache()
+                from web.app import init_agents
                 init_agents()
             return {"success": True, "message": "配置已激活"}
         return {"success": False, "message": "配置不存在"}, 404
@@ -283,6 +302,7 @@ def activate_config_api(config_id):
 
 
 @api_bp.route("/api/configs/test", methods=["POST"])
+@auth_required
 def test_config_api():
     """测试 API 连通性"""
     try:
@@ -359,15 +379,24 @@ def test_config_api():
         return {"success": False, "message": f"测试失败: {str(e)}"}, 500
 
 
+def _mask_api_key(key: str | None) -> str:
+    """对 API Key 进行脱敏处理：只显示前4位和后4位。"""
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "****"
+    return key[:4] + "****" + key[-4:]
+
+
 @api_bp.route("/api/config", methods=["GET"])
 def get_config():
-    """获取当前活跃配置（兼容旧版）"""
+    """获取当前活跃配置（兼容旧版）——返回脱敏后的 API Key。"""
     active = get_active_config()
     if active:
         return {
             "provider": active.get("provider", "ollama"),
             "model": active.get("model", ""),
-            "apiKey": active.get("apiKey", "")
+            "apiKey": _mask_api_key(active.get("apiKey", ""))
         }
     from core.config import get_provider, get_model_name
     from dotenv import load_dotenv
@@ -381,7 +410,7 @@ def get_config():
     return {
         "provider": provider,
         "model": get_model_name() if provider == get_provider() else "",
-        "apiKey": api_key
+        "apiKey": _mask_api_key(api_key)
     }
 
 
@@ -404,6 +433,7 @@ def get_plugins_api():
 
 
 @api_bp.route("/api/plugins/<name>/execute", methods=["POST"])
+@auth_required
 def execute_plugin_api(name):
     """执行指定插件"""
     try:
@@ -419,6 +449,7 @@ def execute_plugin_api(name):
 
 
 @api_bp.route("/api/plugins/<name>/enable", methods=["POST"])
+@auth_required
 def enable_plugin_api(name):
     """启用插件"""
     try:
@@ -432,6 +463,7 @@ def enable_plugin_api(name):
 
 
 @api_bp.route("/api/plugins/<name>/disable", methods=["POST"])
+@auth_required
 def disable_plugin_api(name):
     """禁用插件"""
     try:
@@ -480,6 +512,8 @@ def _scan_plugin_content(content: str) -> list[str]:
     - 危险调用名(eval/exec/getattr/system/...)
     - 危险 dunder 属性访问(__class__/__subclasses__/__globals__ 链式)
     - 字符串拼接 + getattr 间接调用(getattr 已直接禁)
+    - __builtins__['eval'] 等下标访问绕过
+    - Lambda / comprehension 中隐藏的危险调用
     """
     issues: list[str] = []
     try:
@@ -487,6 +521,20 @@ def _scan_plugin_content(content: str) -> list[str]:
     except SyntaxError as e:
         issues.append(f"语法错误: {e}")
         return issues
+
+    def _check_name(node, name: str) -> bool:
+        """递归检查 Name 节点，处理字符串拼接和 f-string 构造的调用名。"""
+        if isinstance(node, ast.Name):
+            return node.id == name
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value == name
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return _check_name(node.left, name) or _check_name(node.right, name)
+        if isinstance(node, ast.JoinedStr):
+            for v in node.values:
+                if isinstance(v, ast.Constant) and isinstance(v.value, str) and name in v.value:
+                    return True
+        return False
 
     for node in ast.walk(tree):
         # import xxx
@@ -509,10 +557,30 @@ def _scan_plugin_content(content: str) -> list[str]:
                 issues.append(f"禁止调用: {node.func.id}")
             elif isinstance(node.func, ast.Attribute) and node.func.attr in _PLUGIN_FORBIDDEN_CALLS:
                 issues.append(f"禁止调用: .{node.func.attr}()")
+            # 下标调用: __builtins__['eval']('code')
+            elif isinstance(node.func, ast.Subscript):
+                sub = node.func
+                if isinstance(sub.value, ast.Name) and sub.value.id == "__builtins__":
+                    if isinstance(sub.slice, ast.Constant) and sub.slice.value in _PLUGIN_FORBIDDEN_CALLS:
+                        issues.append(f"禁止调用: __builtins__['{sub.slice.value}']()")
+                    elif isinstance(sub.slice, ast.Name) and sub.slice.id in _PLUGIN_FORBIDDEN_CALLS:
+                        issues.append(f"禁止调用: __builtins__['{sub.slice.id}']()")
+            # 间接调用: getattr(obj, 'eval')()
+            elif isinstance(node.func, ast.Call):
+                inner = node.func
+                if isinstance(inner.func, ast.Name) and inner.func.id == "getattr":
+                    if len(inner.args) >= 2:
+                        if _check_name(inner.args[1], "eval") or _check_name(inner.args[1], "exec"):
+                            issues.append("禁止间接调用: getattr(..., 'eval/exec')()")
         # 危险属性访问 (.__class__ / .__subclasses__ 等)
         elif isinstance(node, ast.Attribute):
             if node.attr in _PLUGIN_FORBIDDEN_ATTRS:
                 issues.append(f"禁止访问 dunder 属性: .{node.attr}")
+        # 下标访问: __builtins__['__import__']
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name) and node.value.id == "__builtins__":
+                if isinstance(node.slice, ast.Constant) and node.slice.value in _PLUGIN_FORBIDDEN_ATTRS:
+                    issues.append(f"禁止下标访问: __builtins__['{node.slice.value}']")
     return list(set(issues))
 
 
@@ -571,6 +639,7 @@ def get_cache_stats_api():
 
 
 @api_bp.route("/api/cache/clear", methods=["POST"])
+@auth_required
 def clear_cache_api():
     """清空缓存"""
     try:
@@ -583,6 +652,7 @@ def clear_cache_api():
 
 
 @api_bp.route("/api/cache/config", methods=["POST"])
+@auth_required
 def config_cache_api():
     """配置缓存参数"""
     try:
@@ -615,6 +685,7 @@ def get_rag_backends_api():
 
 
 @api_bp.route("/api/rag/backend", methods=["POST"])
+@auth_required
 def set_rag_backend_api():
     """切换向量存储后端"""
     try:
@@ -655,6 +726,7 @@ def list_mcp_servers_api():
 
 
 @api_bp.route("/api/mcp/servers", methods=["POST"])
+@auth_required
 def add_mcp_server_api():
     """添加 MCP 服务器"""
     try:
@@ -682,6 +754,7 @@ def add_mcp_server_api():
 
 
 @api_bp.route("/api/mcp/servers/<name>", methods=["DELETE"])
+@auth_required
 def delete_mcp_server_api(name):
     """删除 MCP 服务器"""
     try:
@@ -697,6 +770,7 @@ def delete_mcp_server_api(name):
 
 
 @api_bp.route("/api/mcp/servers/<name>/toggle", methods=["POST"])
+@auth_required
 def toggle_mcp_server_api(name):
     """启用/禁用 MCP 服务器"""
     try:
@@ -726,6 +800,7 @@ def list_mcp_tools_api():
 
 
 @api_bp.route("/api/mcp/tools/<server>/<tool>", methods=["POST"])
+@auth_required
 def call_mcp_tool_api(server, tool):
     """测试调用 MCP 工具"""
     try:
@@ -757,6 +832,7 @@ def get_router_status_api():
 
 
 @api_bp.route("/api/router/config", methods=["POST"])
+@auth_required
 def config_router_api():
     """配置模型路由"""
     try:
@@ -771,6 +847,7 @@ def config_router_api():
 
 
 @api_bp.route("/api/router/tiers/<tier>", methods=["POST"])
+@auth_required
 def set_router_tier_api(tier):
     """设置模型档位"""
     try:
@@ -830,7 +907,7 @@ def login_api():
         api_key = data.get("apiKey", "").strip()
         if not api_key:
             return {"success": False, "message": "请提供 API Key"}, 400
-        user = authenticate(api_key)
+        user = authenticate(api_key, ip=request.remote_addr or "")
         if not user:
             return {"success": False, "message": "API Key 无效"}, 401
         return {"success": True, "user": user.to_dict()}
@@ -840,8 +917,9 @@ def login_api():
 
 
 @api_bp.route("/api/auth/users", methods=["GET"])
+@auth_required
 def list_users_api():
-    """列出所有用户"""
+    """列出所有用户(需认证 + LOCAL_ONLY 双重保护)"""
     if not AUTH_ENABLED:
         return {"success": False, "message": "认证系统未启用"}, 400
     try:
@@ -852,11 +930,16 @@ def list_users_api():
 
 
 @api_bp.route("/api/auth/users/<user_id>", methods=["DELETE"])
+@auth_required
 def delete_user_api(user_id):
-    """删除用户"""
+    """删除用户(需认证 + LOCAL_ONLY 双重保护)。用户只能删除自己。"""
     if not AUTH_ENABLED:
         return {"success": False, "message": "认证系统未启用"}, 400
     try:
+        from core.auth import get_current_user
+        current_user = get_current_user()
+        if not current_user or current_user.id != user_id:
+            return {"success": False, "message": "只能删除自己的账号"}, 403
         if delete_user(user_id):
             return {"success": True, "message": "用户已删除"}
         return {"success": False, "message": "用户不存在"}, 404
@@ -865,7 +948,5 @@ def delete_user_api(user_id):
         return {"success": False, "message": str(e)}, 500
 
 
-# 延迟导入 web.app 符号（避免循环导入导致 Blueprint 注册顺序错误）
-from web.app import _GENERATED_DIR, has_valid_config, init_agents  # noqa: E402
 
 

@@ -1,23 +1,23 @@
 {
   "light": {
-    "provider": "kimi-code",
-    "model": "kimi-for-coding",
-    "apiKey": "sk-kimi-MnvYSqxdjWNe1RER1nH5LpAMx9N95oTeYIakfBbPhSI7nRabr7T2UmKbsgnxBX6M",
-    "baseUrl": "https://api.kimi.com/coding/v1",
-    "description": "轻量模型（简单问答）"
+    "provider": "siliconflow",
+    "model": "Pro/deepseek-ai/DeepSeek-V3.2",
+    "apiKey": "",
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "description": "轻量模型（简单问答、问候）"
   },
   "default": {
-    "provider": "kimi-code",
-    "model": "kimi-for-coding",
-    "apiKey": "sk-kimi-MnvYSqxdjWNe1RER1nH5LpAMx9N95oTeYIakfBbPhSI7nRabr7T2UmKbsgnxBX6M",
-    "baseUrl": "https://api.kimi.com/coding/v1",
-    "description": "默认模型"
+    "provider": "siliconflow",
+    "model": "Pro/deepseek-ai/DeepSeek-V3.2",
+    "apiKey": "",
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "description": "默认模型（一般问题）"
   },
   "powerful": {
     "provider": "kimi-code",
     "model": "kimi-for-coding",
-    "apiKey": "sk-kimi-MnvYSqxdjWNe1RER1nH5LpAMx9N95oTeYIakfBbPhSI7nRabr7T2UmKbsgnxBX6M",
+    "apiKey": "",
     "baseUrl": "https://api.kimi.com/coding/v1",
-    "description": "强力模型（复杂任务）"
+    "description": "强力模型（仅用于真实编码任务，由 ModelRouter._is_coding_intent 把关）"
   }
 }

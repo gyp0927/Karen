@@ -7,6 +7,7 @@
 """
 import asyncio
 import logging
+import os
 from typing import Optional, Any
 
 from langchain_core.tools import tool, BaseTool
@@ -14,11 +15,14 @@ from langchain_core.messages import ToolMessage, AIMessage
 
 logger = logging.getLogger(__name__)
 
+# 代码执行默认关闭,需显式开启 ENABLE_CODE_EXECUTION=true
+_CODE_EXEC_ENABLED = os.getenv("ENABLE_CODE_EXECUTION", "false").lower() in ("true", "1", "yes")
+
 
 # ========== 工具定义 ==========
 
 @tool
-def web_search(query: str) -> str:
+async def web_search(query: str) -> str:
     """联网搜索。当你需要查询实时信息、新闻、事实、数据时使用此工具。
 
     Args:
@@ -27,17 +31,17 @@ def web_search(query: str) -> str:
     Returns:
         格式化的搜索结果文本，包含标题、链接和网页摘要
     """
-    # 同步导入避免循环依赖
+    # 同步导入避免循环依赖;在 to_thread 中执行避免阻塞事件循环
     from tools.search import search_and_summarize
     try:
-        return search_and_summarize(query, max_results=2)
+        return await asyncio.to_thread(search_and_summarize, query, max_results=2)
     except Exception as e:
         logger.warning(f"Web search tool failed: {e}")
         return f"[搜索失败: {e}]"
 
 
 @tool
-def memory_search(query: str) -> str:
+async def memory_search(query: str) -> str:
     """搜索长期记忆。当你需要回忆用户的个人信息、历史对话内容、偏好设置时使用此工具。
 
     Args:
@@ -51,18 +55,7 @@ def memory_search(query: str) -> str:
         if not _MEMORY_SYSTEM_AVAILABLE:
             return ""
         store = get_memory_store()
-        import asyncio
-        # 使用 run_coroutine_threadsafe 在同步函数中调用异步代码
-        try:
-            loop = asyncio.get_running_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                store.retrieve(query, top_k=3), loop
-            )
-            memories = future.result(timeout=2.0)
-        except RuntimeError:
-            # 没有运行中的事件循环，创建新的
-            memories = asyncio.run(store.retrieve(query, top_k=3))
-
+        memories = await store.retrieve(query, top_k=3)
         if memories:
             formatted = store.format_memories_for_prompt(memories)
             return formatted or ""
@@ -72,7 +65,7 @@ def memory_search(query: str) -> str:
 
 
 @tool
-def knowledge_search(query: str) -> str:
+async def knowledge_search(query: str) -> str:
     """搜索知识库。当你需要查询已上传的文档、资料、RAG 内容时使用此工具。
 
     Args:
@@ -83,14 +76,14 @@ def knowledge_search(query: str) -> str:
     """
     try:
         from core.rag import search_knowledge
-        return search_knowledge(query, top_k=3)
+        return await search_knowledge(query, top_k=3)
     except Exception as e:
         logger.warning(f"Knowledge search tool failed: {e}")
     return ""
 
 
 @tool
-def execute_python(code: str) -> str:
+async def execute_python(code: str) -> str:
     """执行 Python 代码。当你需要计算数学问题、处理数据、验证代码时使用此工具。
 
     Args:
@@ -99,10 +92,12 @@ def execute_python(code: str) -> str:
     Returns:
         代码执行结果（stdout 输出或错误信息）
     """
+    if not _CODE_EXEC_ENABLED:
+        return "[代码执行已禁用:请在环境变量中设置 ENABLE_CODE_EXECUTION=true 才能启用]"
     try:
-        from tools.code_executor import execute_code
-        result = execute_code(code)
-        if result["success"]:
+        from tools.code_executor import execute_python, format_result
+        result = await asyncio.to_thread(execute_python, code)
+        if result.get("success"):
             output = result.get("stdout", "")
             if output:
                 return f"执行成功:\n{output}"
@@ -121,8 +116,9 @@ DEFAULT_TOOLS: list[BaseTool] = [
     web_search,
     memory_search,
     knowledge_search,
-    execute_python,
 ]
+if _CODE_EXEC_ENABLED:
+    DEFAULT_TOOLS.append(execute_python)
 
 
 def get_available_tools() -> list[BaseTool]:
@@ -147,11 +143,11 @@ async def execute_tool_call(tool_call: dict) -> str:
         if t.name == tool_name:
             try:
                 logger.info(f"[Tool] 执行 {tool_name}({tool_args})")
-                # 检查工具是否是异步的
+                # 所有工具统一走异步路径，避免同步调用阻塞事件循环
                 if asyncio.iscoroutinefunction(t.ainvoke):
                     result = await t.ainvoke(tool_args)
                 else:
-                    result = t.invoke(tool_args)
+                    result = await asyncio.to_thread(t.invoke, tool_args)
                 logger.info(f"[Tool] {tool_name} 完成")
                 return str(result) if result else ""
             except Exception as e:

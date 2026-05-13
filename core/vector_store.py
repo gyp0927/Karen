@@ -71,11 +71,11 @@ class NumpyBackend(VectorStoreBackend):
     _lock = threading.Lock()
 
     def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._init_store()
+        with cls._lock:
+            if cls._instance is None:
+                instance = super().__new__(cls)
+                instance._init_store()
+                cls._instance = instance
         return cls._instance
 
     def _init_store(self):

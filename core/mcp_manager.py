@@ -18,10 +18,16 @@ _CONFIG_PATH = os.path.join(
 )
 
 # 通过环境变量限制 stdio MCP 可启动的命令(防 add_server 任意命令注入)
-# 不设置时为空 -> 允许所有(向后兼容);生产建议设为如 "npx,uvx,python"
-_MCP_ALLOWED = {
-    c.strip() for c in os.getenv("MCP_ALLOWED_COMMANDS", "").split(",") if c.strip()
-}
+# 默认拒绝所有命令，必须显式配置白名单才允许启动 MCP 服务器
+# 安全建议: 只放行无脚本执行能力的包装器如 "npx,uvx"
+# 将 python/node 等可执行任意代码的命令排除在外
+_DEFAULT_ALLOWED = "npx,uvx"
+_mcp_env = os.getenv("MCP_ALLOWED_COMMANDS", _DEFAULT_ALLOWED)
+# 如果环境变量显式设为空字符串，也表示拒绝所有（而非允许所有）
+if _mcp_env.strip() == "":
+    _MCP_ALLOWED = set()
+else:
+    _MCP_ALLOWED = {c.strip() for c in _mcp_env.split(",") if c.strip()}
 
 # 透传给 MCP 子进程的最小环境变量集合 — 不含项目 API Key
 # 防止恶意/失误的 MCP 拿到所有凭据
@@ -104,11 +110,52 @@ class MCPManager:
                    env: dict = None, url: str = "", transport: str = "stdio") -> bool:
         """添加/更新服务器配置"""
         # 命令白名单校验:防止远程攻击者(在 LOCAL_ONLY 误绕过等场景下)注入任意 shell 命令
-        if transport == "stdio" and command and _MCP_ALLOWED:
+        # 白名单为空时拒绝所有命令（默认安全策略）
+        if transport == "stdio" and command:
+            if not _MCP_ALLOWED:
+                raise ValueError(
+                    "MCP 命令白名单为空，拒绝启动所有 stdio 服务器。"
+                    "请通过环境变量 MCP_ALLOWED_COMMANDS 配置白名单（如 'npx,uvx'）"
+                )
+            # 使用绝对路径解析防止相对路径绕过(如 ./python)
+            # TOCTOU 防护:先解析路径(不依赖 exists),再用 try/except 处理异常
+            try:
+                cmd_path = os.path.abspath(command)
+                cmd_real = os.path.realpath(cmd_path)
+            except (OSError, ValueError):
+                cmd_path = command
+                cmd_real = command
             cmd_basename = os.path.basename(command).lower()
-            if cmd_basename not in _MCP_ALLOWED and command not in _MCP_ALLOWED:
+            # 检查命令本身、绝对路径和真实路径
+            allowed_paths: set[str] = set()
+            for a in _MCP_ALLOWED:
+                try:
+                    allowed_paths.add(os.path.abspath(a))
+                    allowed_paths.add(os.path.realpath(os.path.abspath(a)))
+                except (OSError, ValueError):
+                    pass
+            if (
+                cmd_basename not in _MCP_ALLOWED
+                and command not in _MCP_ALLOWED
+                and cmd_path not in allowed_paths
+                and cmd_real not in allowed_paths
+            ):
                 raise ValueError(
                     f"命令 '{command}' 不在 MCP_ALLOWED_COMMANDS 白名单中"
+                )
+            # 额外检查:阻止通过参数执行任意代码
+            _args = args or []
+            dangerous_flags = {"-c", "--command", "-e", "--eval", "-m", "--module", "-", "--run"}
+            for i, arg in enumerate(_args):
+                if arg in dangerous_flags and i + 1 < len(_args):
+                    raise ValueError(
+                        f"命令 '{command}' 包含危险参数 '{arg}'，"
+                        "可能用于执行任意代码，已被阻止"
+                    )
+            # 阻止参数中包含内联脚本（如 python 的 -c 'print(1)'）
+            if any(";" in a or "|" in a or "$(" in a for a in _args):
+                raise ValueError(
+                    f"命令 '{command}' 的参数包含可疑字符（分号、管道等），已被阻止"
                 )
         self._servers[name] = {
             "transport": transport,

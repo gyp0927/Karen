@@ -14,8 +14,8 @@ from cognition.human_mind import HumanMind
 from cognition.types import CognitiveState, ThinkingMode
 from cognition.utils import serialize_cognitive_state, get_cognitive_state_from_dict
 
-# Fast graph 需要的搜索和工具函数
-from agents.search import web_searcher_agent, memory_searcher_agent
+# Fast graph 只需要 responder_node（搜索/工具在节点内部异步处理）
+# Coordination graph 仍需要 tool_caller_node
 from agents.tools import tool_caller_node
 from agents.nodes import responder_node
 
@@ -48,10 +48,7 @@ class HumanInterface:
         logger.info("认知系统已初始化：内心独白 + 情感 + 直觉 + 元认知 + 人格")
 
         if fast_mode or coordinator is None:
-            self.graph = create_fast_graph(
-                web_searcher_agent, memory_searcher_agent,
-                tool_caller_node, responder_node,
-            )
+            self.graph = create_fast_graph(responder_node)
         else:
             self.graph = create_coordination_graph(
                 coordinator, researcher, tool_caller_node, responder_node,
@@ -132,8 +129,17 @@ class HumanInterface:
                 agent_name = getattr(msg, "name", None) or "assistant"
                 self.messages.add_agent_message(msg.content, agent_name)
 
-        # 获取最后一条 Agent 消息
-        response = result["messages"][-1].content
+        # 获取最后一条 AIMessage 作为响应。
+        # 不能直接取 messages[-1]:若所有节点返回 {"messages": []},
+        # add reducer 会保留原 HumanMessage,messages[-1].content 就是用户输入,表现为"回声"。
+        response = None
+        for msg in reversed(result["messages"]):
+            if isinstance(msg, AIMessage):
+                response = msg.content
+                break
+        if not response:
+            logger.warning("No AIMessage in graph result; returning fallback response.")
+            response = "抱歉,我现在没法回答这个问题。可能是模型暂时无法处理,请稍后再试或换个问法。"
 
         # 如果启用了审查，执行审查
         if self.review and self.reviewer:

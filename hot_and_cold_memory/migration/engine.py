@@ -267,10 +267,8 @@ class MigrationEngine:
             # 1. Embed the summary so cold tier search uses the summary's vector
             summary_embedding = await self.embedder.embed(compressed.summary_text)
 
-            # 2. Drop existing metadata to avoid PK conflicts when re-inserting
-            await self.metadata_store.delete_memories([record.memory_id])
-
-            # 3. Write to cold tier stores directly using the precomputed summary
+            # 2. Write to cold tier stores directly using the precomputed summary
+            # 注意：先写新 tier、确认成功后再删旧 tier，避免中间失败导致数据丢失。
             await self.cold_tier.document_store.store_batch([
                 (record.memory_id, compressed.summary_text)
             ])
@@ -286,9 +284,7 @@ class MigrationEngine:
                 }],
             )
 
-            # 4. Recreate metadata in cold tier。
-            # MemoryItem 没有 document_id / compressed_length 字段(schema drift),
-            # compressed_length 塞进 attributes 保留信息。
+            # 3. Recreate metadata in cold tier
             from hot_and_cold_memory.storage.metadata_store.base import MemoryItem
             now = datetime.utcnow()
             await self.metadata_store.create_memory(MemoryItem(
@@ -305,8 +301,10 @@ class MigrationEngine:
                 attributes={"compressed_length": len(compressed.summary_text)},
             ))
 
-            # 5. Remove from hot tier
+            # 4. 新 tier 全部写入成功后，再删除旧 hot tier（含 metadata）
+            # 这样即使前面任何一步失败，hot tier 数据仍然完整可用。
             await self.hot_tier.delete([record.memory_id])
+            await self.metadata_store.delete_memories([record.memory_id])
 
             ratio = len(compressed.summary_text) / max(len(record.content), 1)
             log.compression_ratio = ratio
@@ -339,84 +337,22 @@ class MigrationEngine:
     async def _migrate_hot_to_cold(self, memory_id: uuid.UUID) -> MigrationResult:
         """Migrate a memory from hot to cold tier (legacy single-memory path).
 
-        Kept for callers that need per-memory migration; the cycle runner uses
-        the batched path for cost efficiency.
+        Delegates to the batched implementation for consistency and cost efficiency.
+        Kept for callers that need per-memory migration.
 
         Args:
-            chunk_id: Memory to migrate.
+            memory_id: Memory to migrate.
 
         Returns:
             Migration result.
         """
-        log = MigrationLog(
-            memory_id=chunk_id,
-            direction="hot_to_cold",
-            original_size=0,
-            new_size=0,
-            started_at=datetime.utcnow(),
-        )
-
-        try:
-            # 1. Retrieve from hot tier
-            memory = await self.hot_tier.get_by_id(memory_id)
-            if not memory:
-                raise ChunkNotFoundError(f"Memory {memory_id} not found in hot tier")
-
-            # 2. Delete old metadata first (avoid unique constraint)
-            await self.metadata_store.delete_memories([chunk_id])
-
-            # 3. Store in cold tier (compresses automatically)
-            await self.cold_tier.store_chunks(
-                chunks=[MemoryEntry(
-                    memory_id=memory.memory_id,
-                    document_id=memory.document_id,
-                    text=memory.content,
-                    tags=memory.metadata.get("tags", []) if memory.metadata else [],
-                )],
-            )
-
-            # 4. Delete from hot tier
-            await self.hot_tier.delete([chunk_id])
-
-            # 5. Get compressed info
-            meta = await self.metadata_store.get_memory(memory_id)
-            original_size = len(memory.content)
-            new_size = (
-                (meta.attributes.get("compressed_length") if meta and meta.attributes else None)
-                or original_size
-            )
-            ratio = new_size / original_size if original_size > 0 else 1.0
-
-            # 6. Log migration
-            log.original_size = original_size
-            log.new_size = new_size
-            log.compression_ratio = ratio
-            log.completed_at = datetime.utcnow()
-            log.status = "success"
-            await self.metadata_store.create_migration_log(log)
-
-            logger.info(
-                "migrated_hot_to_cold",
-                memory_id=str(memory_id),
-                original=original_size,
-                compressed=new_size,
-                ratio=ratio,
-            )
-
-            return MigrationResult(
-                memory_id=chunk_id,
-                direction="hot_to_cold",
-                original_size=original_size,
-                new_size=new_size,
-                compression_ratio=ratio,
-            )
-
-        except Exception as e:
-            log.status = "failed"
-            log.error_message = str(e)
-            log.completed_at = datetime.utcnow()
-            await self.metadata_store.create_migration_log(log)
-            raise MigrationError(f"Hot to cold migration failed for {memory_id}: {e}") from e
+        results = await self._migrate_hot_to_cold_batch([memory_id])
+        for result in results:
+            if isinstance(result, MigrationResult):
+                return result
+            elif isinstance(result, Exception):
+                raise result
+        raise MigrationError(f"Hot to cold migration failed for {memory_id}: no result")
 
     async def evict_coldest(self, percent: float = 0.1) -> list[MigrationResult]:
         """Evict the coldest ``percent`` of hot chunks down to cold tier.
@@ -457,14 +393,17 @@ class MigrationEngine:
     async def _migrate_cold_to_hot(self, memory_id: uuid.UUID) -> MigrationResult:
         """Migrate a memory from cold to hot tier.
 
+        If the cold-tier memory was compressed, attempts to expand the summary
+        back toward the original length before storing in hot tier.
+
         Args:
-            chunk_id: Memory to migrate.
+            memory_id: Memory to migrate.
 
         Returns:
             Migration result.
         """
         log = MigrationLog(
-            memory_id=chunk_id,
+            memory_id=memory_id,
             direction="cold_to_hot",
             original_size=0,
             new_size=0,
@@ -477,36 +416,72 @@ class MigrationEngine:
             if not memory:
                 raise ChunkNotFoundError(f"Memory {memory_id} not found in cold tier")
 
-            # Get original content (summary)
-            summary = memory.content
+            # Get metadata for original length and compression info
+            meta = await self.metadata_store.get_memory(memory_id)
 
-            # 2. Decompress
-            decompressed = await self.cold_tier.decompression_engine.decompress(summary)
+            # Check if content was compressed and attempt expansion
+            is_compressed = (
+                memory.metadata.get("compressed", False)
+                if memory.metadata else False
+            )
+            content = memory.content
 
-            # 3. Generate embedding
-            embedding = await self.embedder.embed(decompressed)
+            if is_compressed and meta and meta.original_length > len(content) * 1.2:
+                try:
+                    from hot_and_cold_memory.core.llm_client import LLMClient
+                    client = LLMClient()
+                    target_len = meta.original_length
+                    prompt = (
+                        f"Expand this compressed summary back to approximately "
+                        f"{target_len} characters. Preserve all facts, entities, "
+                        f"numbers, dates, and relationships. Do NOT invent new "
+                        f"information not present in the summary.\n\n"
+                        f"Summary:\n{content}\n\nExpanded text:"
+                    )
+                    expanded = await client.complete(
+                        prompt=prompt,
+                        model=self.settings.COMPRESSION_MODEL,
+                        max_tokens=min(target_len // 2, self.settings.LLM_MAX_TOKENS),
+                        temperature=0.1,
+                    )
+                    if expanded and len(expanded) > len(content):
+                        content = expanded
+                        logger.info(
+                            "expanded_compressed_memory",
+                            memory_id=str(memory_id),
+                            summary_len=len(memory.content),
+                            expanded_len=len(content),
+                            target_len=target_len,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "memory_expansion_failed",
+                        memory_id=str(memory_id),
+                        error=str(e),
+                    )
 
-            # 4. Delete old metadata first (avoid unique constraint)
-            await self.metadata_store.delete_memories([chunk_id])
+            # 2. Generate embedding for the (possibly expanded) content
+            embedding = await self.embedder.embed(content)
 
-            # 5. Store in hot tier
-            await self.hot_tier.store_chunks(
-                chunks=[MemoryEntry(
+            # 3. Store in hot tier using full content（先写新 tier）
+            await self.hot_tier.store_memories(
+                memories=[MemoryEntry(
                     memory_id=memory.memory_id,
-                    document_id=memory.document_id,
-                    text=decompressed,
+                    content=content,
                     tags=memory.metadata.get("tags", []) if memory.metadata else [],
                 )],
                 embeddings=[embedding],
             )
 
-            # 6. Delete from cold tier
-            await self.cold_tier.delete([chunk_id])
+            # 4. 新 tier 写入成功后，再删除旧 cold tier（含 metadata）
+            # 这样即使前面任何一步失败，cold tier 数据仍然完整可用。
+            await self.cold_tier.delete([memory_id])
+            await self.metadata_store.delete_memories([memory_id])
 
             # 6. Log migration
-            log.original_size = len(summary)
-            log.new_size = len(decompressed)
-            log.compression_ratio = len(summary) / len(decompressed) if len(decompressed) > 0 else 1.0
+            log.original_size = meta.original_length if meta else len(content)
+            log.new_size = len(content)
+            log.compression_ratio = len(content) / max(log.original_size, 1)
             log.completed_at = datetime.utcnow()
             log.status = "success"
             await self.metadata_store.create_migration_log(log)
@@ -514,16 +489,16 @@ class MigrationEngine:
             logger.info(
                 "migrated_cold_to_hot",
                 memory_id=str(memory_id),
-                summary_len=len(summary),
-                expanded_len=len(decompressed),
+                content_len=len(content),
+                original_len=log.original_size,
             )
 
             return MigrationResult(
-                memory_id=chunk_id,
+                memory_id=memory_id,
                 direction="cold_to_hot",
-                original_size=len(summary),
-                new_size=len(decompressed),
-                compression_ratio=log.compression_ratio or 0,
+                original_size=log.original_size,
+                new_size=len(content),
+                compression_ratio=log.compression_ratio,
             )
 
         except Exception as e:

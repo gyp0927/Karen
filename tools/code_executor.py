@@ -21,6 +21,13 @@ _FORBIDDEN_MODULES = {
     "compileall", "py_compile", "bdb", "pdb", "trace",
     "shutil", "pathlib", "tempfile", "multiprocessing",
     "builtins",  # 防 import builtins 拿 __import__
+    "io",        # 可通过 io.open 获取真实 builtins
+    "operator",  # 可通过 operator.attrgetter 逃逸
+    "inspect",   # 可内省 frame、获取 globals
+    "types",     # 可构造新类型、获取 FrameType
+    "warnings",  # 可触发 warnings.showwarning 写文件
+    "code",      # 可动态编译代码
+    "codeop",    # 编译辅助
 }
 
 # 禁止在代码中使用的危险函数/方法名（全局禁止 + 模块级禁止）
@@ -29,6 +36,7 @@ _FORBIDDEN_CALLS_GLOBAL = {
     "system", "popen", "call", "run", "exec_",
     "getattr", "setattr", "delattr",  # 动态属性
     "globals", "locals", "vars",       # 命名空间内省
+    "attrgetter", "itemgetter", "methodcaller",  # operator 逃逸链
 }
 # 以下函数名被导入到当前作用域时也禁止（如 from importlib import import_module）
 _FORBIDDEN_CALLS_ALIASED = {
@@ -122,16 +130,20 @@ def _execute_code_worker(code: str, timeout: int, result_queue: multiprocessing.
             # 创建一个受限的全局命名空间。
             # 要 pop 的远不止 open/eval — 还有可被构造逃逸链的 type/object/__build_class__/getattr 等。
             import builtins
+            import types as _types
             safe_builtins = dict(builtins.__dict__)
             for _fname in (
                 "open", "input", "exec", "eval", "compile", "__import__",
                 "__build_class__", "globals", "locals", "vars",
                 "type", "object", "memoryview", "getattr", "setattr", "delattr",
                 "breakpoint", "help", "exit", "quit",
+                "attrgetter", "itemgetter", "methodcaller",  # operator 模块函数
             ):
                 safe_builtins.pop(_fname, None)
+            # 使用 MappingProxyType 冻结 builtins，防止运行时修改
+            frozen_builtins = _types.MappingProxyType(safe_builtins)
             safe_globals = {
-                "__builtins__": safe_builtins,
+                "__builtins__": frozen_builtins,
                 "__name__": "__main__",
             }
             exec(code, safe_globals)
