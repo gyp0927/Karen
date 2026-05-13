@@ -4,26 +4,54 @@
 *.key
 *.pem
 
-# Python 缓存
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Claude 工作目录
-.claude/
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # 运行时数据
 data/
+karen/data/
 state/*.db
 state/*.sqlite
 state/*.sqlite3
+*.db
+*.sqlite
+*.sqlite3
+qdrant_storage/
 state/model_configs.json
 
 # 构建产物
-build/
-dist/
 *.spec
 
 # 生成的文件
@@ -31,6 +59,17 @@ web/generated_files/
 
 # 日志
 *.log
+logs/
 
 # Windows 批处理文件
 *.bat
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude 工作目录
+.claude/
+
+# 临时测试文件（含 API key，不上传）
+test_kimi_*.py

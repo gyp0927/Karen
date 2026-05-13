@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP 服务器 - 凯伦</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script>
+    (function() {
+      const theme = localStorage.getItem("theme") || "system";
+      if (theme === "system") {
+        const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+        document.documentElement.setAttribute("data-theme", prefersLight ? "light" : "dark");
+      } else {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --cfg-bg: #0a0a0f;
+      --cfg-card: #16161f;
+      --cfg-card-border: rgba(255,255,255,0.06);
+      --cfg-text: #e8e8f0;
+      --cfg-text2: #9ca3af;
+      --cfg-text3: #6b7280;
+      --cfg-accent: #00d4aa;
+      --cfg-accent-h: #00b894;
+      --cfg-ok: #22c55e;
+      --cfg-err: #ef4444;
+      --cfg-radius: 14px;
+      --cfg-radius-sm: 10px;
+      --cfg-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    }
+
+    [data-theme="light"] {
+      --cfg-bg: #f5f7fa;
+      --cfg-card: #ffffff;
+      --cfg-card-border: rgba(0,0,0,0.06);
+      --cfg-text: #1f2937;
+      --cfg-text2: #6b7280;
+      --cfg-text3: #9ca3af;
+      --cfg-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--cfg-bg);
+      color: var(--cfg-text);
+      min-height: 100vh;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+
+    .top-bar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10,10,15,0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--cfg-card-border);
+      padding: 0 20px;
+    }
+
+    [data-theme="light"] .top-bar {
+      background: rgba(255,255,255,0.85);
+    }
+
+    .top-bar-inner {
+      max-width: 860px;
+      margin: 0 auto;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .top-bar-back {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--cfg-text2);
+      text-decoration: none;
+      font-size: 0.9rem;
+      padding: 6px 12px;
+      border-radius: var(--cfg-radius-sm);
+      transition: all 0.2s;
+    }
+
+    .top-bar-back:hover {
+      background: var(--cfg-card);
+      color: var(--cfg-text);
+    }
+
+    .top-bar-title {
+      font-size: 1rem;
+      font-weight: 600;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .cfg-main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 24px 20px 60px;
+    }
+
+    .section-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--cfg-text3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 32px 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .section-title:first-child {
+      margin-top: 0;
+    }
+
+    .btn {
+      padding: 10px 18px;
+      border: none;
+      border-radius: var(--cfg-radius-sm);
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: inherit;
+    }
+
+    .btn-primary {
+      background: var(--cfg-accent);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--cfg-accent-h);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--cfg-text);
+      border: 1.5px solid var(--cfg-card-border);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--cfg-accent);
+      color: var(--cfg-accent);
+    }
+
+    .btn-danger {
+      background: transparent;
+      color: var(--cfg-err);
+      border: 1.5px solid var(--cfg-err);
+    }
+
+    .btn-danger:hover {
+      background: rgba(239,68,68,0.08);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    /* Server Card */
+    .server-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 12px;
+    }
+
+    .server-card {
+      background: var(--cfg-card);
+      border: 1.5px solid var(--cfg-card-border);
+      border-radius: var(--cfg-radius);
+      padding: 16px;
+      transition: all 0.2s;
+    }
+
+    .server-card:hover {
+      border-color: var(--cfg-accent);
+      box-shadow: var(--cfg-shadow);
+    }
+
+    .server-card.disabled {
+      opacity: 0.6;
+    }
+
+    .server-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .server-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: rgba(16,163,127,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      flex-shrink: 0;
+    }
+
+    .server-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .server-name {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--cfg-text);
+    }
+
+    .server-type {
+      font-size: 0.75rem;
+      color: var(--cfg-text3);
+    }
+
+    .server-cmd {
+      font-size: 0.8rem;
+      color: var(--cfg-text2);
+      background: var(--cfg-bg);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-family: "SF Mono", Monaco, monospace;
+      word-break: break-all;
+      margin-bottom: 10px;
+    }
+
+    .server-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .server-btn {
+      flex: 1;
+      padding: 6px 10px;
+      border: 1px solid var(--cfg-card-border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--cfg-text2);
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .server-btn:hover {
+      border-color: var(--cfg-accent);
+      color: var(--cfg-accent);
+    }
+
+    .server-btn.danger:hover {
+      border-color: var(--cfg-err);
+      color: var(--cfg-err);
+    }
+
+    /* Form */
+    .form-card {
+      background: var(--cfg-card);
+      border: 1px solid var(--cfg-card-border);
+      border-radius: var(--cfg-radius);
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: var(--cfg-shadow);
+    }
+
+    .form-card.hidden {
+      display: none;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--cfg-text2);
+      margin-bottom: 6px;
+    }
+
+    .cfg-input {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--cfg-bg);
+      border: 1.5px solid var(--cfg-card-border);
+      border-radius: var(--cfg-radius-sm);
+      color: var(--cfg-text);
+      font-size: 0.95rem;
+      outline: none;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+
+    .cfg-input:focus {
+      border-color: var(--cfg-accent);
+      box-shadow: 0 0 0 3px rgba(16,163,127,0.15);
+    }
+
+    .form-hint {
+      font-size: 0.8rem;
+      color: var(--cfg-text3);
+      margin-top: 4px;
+    }
+
+    .transport-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+    }
+
+    .transport-tab {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1.5px solid var(--cfg-card-border);
+      background: transparent;
+      color: var(--cfg-text2);
+      font-size: 0.85rem;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .transport-tab.active {
+      border-color: var(--cfg-accent);
+      background: rgba(16,163,127,0.08);
+      color: var(--cfg-accent);
+    }
+
+    /* Tool List */
+    .tool-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      border-radius: 6px;
+      background: rgba(16,163,127,0.08);
+      color: var(--cfg-accent);
+      font-size: 0.75rem;
+      font-weight: 500;
+      margin: 2px;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      top: 68px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-20px);
+      padding: 12px 24px;
+      border-radius: var(--cfg-radius-sm);
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: white;
+      z-index: 10000;
+      opacity: 0;
+      transition: all 0.3s;
+      pointer-events: none;
+      box-shadow: var(--cfg-shadow);
+      white-space: nowrap;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .toast.ok { background: var(--cfg-ok); }
+    .toast.err { background: var(--cfg-err); }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--cfg-text3);
+    }
+
+    @media (max-width: 600px) {
+      .server-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <div class="top-bar-inner">
+      <a href="/" class="top-bar-back">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="19" y1="12" x2="5" y2="12"></line>
+          <polyline points="12 19 5 12 12 5"></polyline>
+        </svg>
+        返回聊天
+      </a>
+      <span class="top-bar-title">MCP 服务器</span>
+      <div style="width: 80px;"></div>
+    </div>
+  </div>
+
+  <main class="cfg-main">
+    <div class="section-title">
+      <span>已连接的服务器</span>
+      <button class="btn btn-primary" id="addServerBtn">&#43; 添加服务器</button>
+    </div>
+    <div class="server-grid" id="serverGrid">
+      <div class="empty-state" id="emptyState">暂无 MCP 服务器，点击上方按钮添加</div>
+    </div>
+
+    <!-- Add Server Form -->
+    <div class="form-card hidden" id="serverForm">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+        <span style="font-size: 1rem; font-weight: 600;">添加 MCP 服务器</span>
+        <button style="background: none; border: none; color: var(--cfg-text3); font-size: 1.2rem; cursor: pointer;" id="closeFormBtn">&times;</button>
+      </div>
+
+      <div class="transport-tabs">
+        <button class="transport-tab active" data-transport="stdio">STDIO (本地命令)</button>
+        <button class="transport-tab" data-transport="sse">SSE (HTTP 接口)</button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">服务器名称</label>
+        <input type="text" class="cfg-input" id="serverName" placeholder="例如：filesystem">
+      </div>
+
+      <div id="stdioFields">
+        <div class="form-group">
+          <label class="form-label">命令</label>
+          <input type="text" class="cfg-input" id="serverCommand" placeholder="例如：python 或 npx">
+        </div>
+        <div class="form-group">
+          <label class="form-label">参数（空格分隔）</label>
+          <input type="text" class="cfg-input" id="serverArgs" placeholder="例如：-m mcp_server_filesystem">
+          <div class="form-hint">如果是 npx 包，填写：-y @modelcontextprotocol/server-filesystem /path/to/dir</div>
+        </div>
+      </div>
+
+      <div id="sseFields" style="display: none;">
+        <div class="form-group">
+          <label class="form-label">SSE URL</label>
+          <input type="text" class="cfg-input" id="serverUrl" placeholder="例如：http://localhost:3000/sse">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-secondary" id="cancelBtn">取消</button>
+        <button class="btn btn-primary" id="saveServerBtn">保存</button>
+      </div>
+    </div>
+
+    <!-- Tools Section -->
+    <div class="section-title" style="margin-top: 40px;">
+      <span>可用工具</span>
+      <button class="btn btn-secondary" id="refreshToolsBtn" style="font-size: 0.8rem; padding: 6px 12px;">&#128260; 刷新</button>
+    </div>
+    <div id="toolsContainer" style="display: flex; flex-wrap: wrap; gap: 6px;">
+      <div class="empty-state" id="toolsEmpty" style="width: 100%;">暂无工具，请先添加并启用服务器</div>
+    </div>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    let currentTransport = "stdio";
+
+    // Transport tabs
+    document.querySelectorAll(".transport-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".transport-tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        currentTransport = tab.dataset.transport;
+        document.getElementById("stdioFields").style.display = currentTransport === "stdio" ? "block" : "none";
+        document.getElementById("sseFields").style.display = currentTransport === "sse" ? "block" : "none";
+      });
+    });
+
+    // Form toggle
+    document.getElementById("addServerBtn").addEventListener("click", () => {
+      document.getElementById("serverForm").classList.remove("hidden");
+      document.getElementById("serverForm").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    document.getElementById("closeFormBtn").addEventListener("click", hideForm);
+    document.getElementById("cancelBtn").addEventListener("click", hideForm);
+
+    function hideForm() {
+      document.getElementById("serverForm").classList.add("hidden");
+      document.getElementById("serverName").value = "";
+      document.getElementById("serverCommand").value = "";
+      document.getElementById("serverArgs").value = "";
+      document.getElementById("serverUrl").value = "";
+    }
+
+    // Load servers
+    async function loadServers() {
+      try {
+        const resp = await fetch("/api/mcp/servers");
+        const data = await resp.json();
+        if (data.success) {
+          renderServers(data.servers || []);
+        }
+      } catch (e) {
+        console.error("Failed to load servers:", e);
+      }
+    }
+
+    function renderServers(servers) {
+      const grid = document.getElementById("serverGrid");
+      const empty = document.getElementById("emptyState");
+      grid.querySelectorAll(".server-card").forEach(el => el.remove());
+
+      if (servers.length === 0) {
+        empty.style.display = "block";
+        return;
+      }
+      empty.style.display = "none";
+
+      servers.forEach(s => {
+        const card = document.createElement("div");
+        card.className = `server-card ${s.enabled ? "" : "disabled"}`;
+        const cmdText = s.transport === "sse" ? s.url : `${s.command} ${(s.args || []).join(" ")}`;
+        card.innerHTML = `
+          <div class="server-header">
+            <div class="server-icon">&#128268;</div>
+            <div class="server-info">
+              <div class="server-name">${escapeHtml(s.name)}</div>
+              <div class="server-type">${s.transport.toUpperCase()} ${s.enabled ? "" : "&#183; 已禁用"}</div>
+            </div>
+          </div>
+          <div class="server-cmd">${escapeHtml(cmdText)}</div>
+          <div class="server-actions">
+            <button class="server-btn" data-action="toggle" data-name="${escapeHtml(s.name)}" data-enable="${!s.enabled}">
+              ${s.enabled ? "&#128308; 禁用" : "&#128994; 启用"}
+            </button>
+            <button class="server-btn danger" data-action="delete" data-name="${escapeHtml(s.name)}">删除</button>
+          </div>
+        `;
+        card.querySelector("[data-action='toggle']").addEventListener("click", () => toggleServer(s.name, !s.enabled));
+        card.querySelector("[data-action='delete']").addEventListener("click", () => deleteServer(s.name));
+        grid.appendChild(card);
+      });
+    }
+
+    // Add server
+    document.getElementById("saveServerBtn").addEventListener("click", async () => {
+      const name = document.getElementById("serverName").value.trim();
+      if (!name) {
+        showToast("请输入服务器名称", true);
+        return;
+      }
+
+      const payload = { name, transport: currentTransport };
+      if (currentTransport === "stdio") {
+        payload.command = document.getElementById("serverCommand").value.trim();
+        const argsStr = document.getElementById("serverArgs").value.trim();
+        payload.args = argsStr ? argsStr.split(/\s+/) : [];
+      } else {
+        payload.url = document.getElementById("serverUrl").value.trim();
+      }
+
+      try {
+        const resp = await fetch("/api/mcp/servers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (data.success) {
+          showToast(data.message);
+          hideForm();
+          loadServers();
+          loadTools();
+        } else {
+          showToast(data.message || "添加失败", true);
+        }
+      } catch (e) {
+        showToast("添加失败", true);
+      }
+    });
+
+    async function toggleServer(name, enable) {
+      try {
+        const resp = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/toggle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: enable }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+          showToast(data.message);
+          loadServers();
+          loadTools();
+        }
+      } catch (e) {
+        showToast("操作失败", true);
+      }
+    }
+
+    async function deleteServer(name) {
+      if (!confirm(`确定要删除 "${name}" 吗？`)) return;
+      try {
+        const resp = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" });
+        const data = await resp.json();
+        if (data.success) {
+          showToast(data.message);
+          loadServers();
+          loadTools();
+        }
+      } catch (e) {
+        showToast("删除失败", true);
+      }
+    }
+
+    // Load tools
+    async function loadTools() {
+      try {
+        const resp = await fetch("/api/mcp/tools");
+        const data = await resp.json();
+        if (data.success) {
+          renderTools(data.tools || []);
+        }
+      } catch (e) {
+        console.error("Failed to load tools:", e);
+      }
+    }
+
+    function renderTools(tools) {
+      const container = document.getElementById("toolsContainer");
+      const empty = document.getElementById("toolsEmpty");
+      container.querySelectorAll(".tool-tag").forEach(el => el.remove());
+
+      if (tools.length === 0) {
+        empty.style.display = "block";
+        return;
+      }
+      empty.style.display = "none";
+
+      tools.forEach(t => {
+        const tag = document.createElement("span");
+        tag.className = "tool-tag";
+        tag.title = t.description || "";
+        tag.textContent = t.name;
+        container.appendChild(tag);
+      });
+    }
+
+    document.getElementById("refreshToolsBtn").addEventListener("click", loadTools);
+
+    function showToast(message, isError = false) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.className = "toast " + (isError ? "err" : "ok");
+      toast.classList.add("show");
+      setTimeout(() => toast.classList.remove("show"), 2500);
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    loadServers();
+    loadTools();
+  </script>
+</body>
+</html>
