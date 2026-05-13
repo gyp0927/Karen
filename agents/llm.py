@@ -111,8 +111,15 @@ def _build_llm_kwargs(sid: str = "") -> dict:
         if not base_url and provider in PROVIDER_CONFIG:
             base_url = PROVIDER_CONFIG[provider]["base_url"]
         api_key = cfg.get("apiKey", "")
-        if not api_key and provider == "ollama":
-            api_key = "ollama"
+        if not api_key:
+            if provider == "ollama":
+                api_key = "ollama"
+            else:
+                # 回退到 core.config 的 key 查找（支持 LLM_API_KEY_{PROVIDER} / LLM_API_KEY）
+                try:
+                    api_key = get_api_key(provider)
+                except ValueError:
+                    api_key = ""
         kwargs = {"api_key": api_key, "base_url": base_url, "model": cfg.get("model", ""), "temperature": 0.7}
     else:
         provider = get_provider()

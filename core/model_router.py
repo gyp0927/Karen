@@ -217,19 +217,16 @@ class ModelRouter:
     def get_tier_config(self, tier: str) -> dict:
         """获取指定档位的模型配置。
 
-        如果配置文件中 apiKey 为空，尝试从环境变量读取：
-        - siliconflow → SILICONFLOW_API_KEY
-        - kimi / kimi-code → KIMI_API_KEY
+        如果配置文件中 apiKey 为空，按优先级尝试：
+        1. 环境变量 LLM_API_KEY_{PROVIDER}
+        2. 环境变量 LLM_API_KEY（通用）
         """
         self._load_tiers()  # 自动刷新缓存
         cfg = self._tiers.get(tier, self._tiers["default"]).copy()
         if not cfg.get("apiKey"):
             provider = cfg.get("provider", "")
-            env_key = None
-            if provider == "siliconflow":
-                env_key = os.getenv("SILICONFLOW_API_KEY")
-            elif provider in ("kimi", "kimi-code"):
-                env_key = os.getenv("KIMI_API_KEY")
+            env_var = f"LLM_API_KEY_{provider.upper().replace('-', '_')}"
+            env_key = os.getenv(env_var) or os.getenv("LLM_API_KEY")
             if env_key:
                 cfg["apiKey"] = env_key
         return cfg
