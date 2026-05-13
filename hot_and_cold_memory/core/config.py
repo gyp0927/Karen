@@ -80,8 +80,8 @@ class Settings(BaseSettings):
     LOCAL_EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     LOCAL_EMBEDDING_DEVICE: str = "cpu"  # "cpu" or "cuda"
 
-    # Metadata Database
-    METADATA_DB_URL: str = "postgresql+asyncpg://memory:memory_password@localhost:5432/hot_and_cold_memory"
+    # Metadata Database (默认 SQLite，无需额外数据库服务器)
+    METADATA_DB_URL: str = "sqlite+aiosqlite:///./data/adaptive_memory.db"
 
     # Cache
     CACHE_URL: str | None = None

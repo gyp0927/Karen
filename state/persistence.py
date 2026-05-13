@@ -96,15 +96,18 @@ def save_message(session_id: str, role: str, content: str, agent_name: str | Non
 
 
 def load_sessions(user_id: str) -> list[dict]:
-    """加载所有会话，必须提供 user_id 进行过滤。"""
-    if not user_id:
-        return []
+    """加载所有会话。当 user_id 为空时加载所有会话（兼容未开启认证的场景）。"""
     with _lock:
         conn = _get_conn()
-        cursor = conn.execute(
-            "SELECT id, title, created_at, updated_at FROM sessions WHERE user_id = ? ORDER BY updated_at DESC",
-            (user_id,)
-        )
+        if user_id:
+            cursor = conn.execute(
+                "SELECT id, title, created_at, updated_at FROM sessions WHERE user_id = ? ORDER BY updated_at DESC",
+                (user_id,)
+            )
+        else:
+            cursor = conn.execute(
+                "SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC"
+            )
         rows = cursor.fetchall()
         return [
             {
@@ -118,16 +121,21 @@ def load_sessions(user_id: str) -> list[dict]:
 
 
 def load_messages(session_id: str, user_id: str) -> list[dict]:
-    """加载指定会话的所有消息，必须提供 user_id 进行过滤。"""
-    if not user_id:
-        return []
+    """加载指定会话的所有消息。当 user_id 为空时不按 user_id 过滤。"""
     with _lock:
         conn = _get_conn()
-        cursor = conn.execute(
-            """SELECT role, content, agent_name, created_at FROM messages
-               WHERE session_id = ? AND user_id = ? ORDER BY created_at ASC""",
-            (session_id, user_id)
-        )
+        if user_id:
+            cursor = conn.execute(
+                """SELECT role, content, agent_name, created_at FROM messages
+                   WHERE session_id = ? AND user_id = ? ORDER BY created_at ASC""",
+                (session_id, user_id)
+            )
+        else:
+            cursor = conn.execute(
+                """SELECT role, content, agent_name, created_at FROM messages
+                   WHERE session_id = ? ORDER BY created_at ASC""",
+                (session_id,)
+            )
         rows = cursor.fetchall()
         return [
             {
@@ -141,28 +149,31 @@ def load_messages(session_id: str, user_id: str) -> list[dict]:
 
 
 def delete_session(session_id: str, user_id: str):
-    """删除会话及其消息（外键级联删除），必须提供 user_id 进行过滤。"""
-    if not user_id:
-        logger.warning("delete_session called without user_id, skipping")
-        return
+    """删除会话及其消息（外键级联删除）。当 user_id 为空时不按 user_id 过滤。"""
     with _lock:
         conn = _get_conn()
-        conn.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+        if user_id:
+            conn.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+        else:
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         conn.commit()
         logger.info(f"Deleted session from DB: {session_id}")
 
 
 def update_session_title(session_id: str, title: str, updated_at: float, user_id: str):
-    """更新会话标题（必须提供 user_id 进行隔离）。"""
-    if not user_id:
-        logger.warning("update_session_title called without user_id, skipping")
-        return
+    """更新会话标题。当 user_id 为空时不按 user_id 过滤。"""
     with _lock:
         conn = _get_conn()
-        conn.execute(
-            "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-            (title, updated_at, session_id, user_id)
-        )
+        if user_id:
+            conn.execute(
+                "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                (title, updated_at, session_id, user_id)
+            )
+        else:
+            conn.execute(
+                "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+                (title, updated_at, session_id)
+            )
         conn.commit()
 
 

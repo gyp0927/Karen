@@ -5,6 +5,7 @@ All operations run in thread pool to avoid blocking asyncio.
 """
 
 import asyncio
+import os
 import uuid
 from typing import Any
 
@@ -51,8 +52,22 @@ class LocalQdrantStore(BaseVectorStore):
 
     async def initialize(self) -> None:
         """Initialize local Qdrant store."""
-        import os
         os.makedirs(self._path, exist_ok=True)
+
+        # 清理遗留的锁文件（上一个进程异常退出时可能未释放）
+        lock_file = os.path.join(self._path, ".lock")
+        if os.path.exists(lock_file):
+            try:
+                # 尝试删除旧锁；若另一个进程真在持有，QdrantClient 初始化会再次失败
+                os.remove(lock_file)
+                logger.warning("Removed stale Qdrant lock file", path=lock_file)
+            except PermissionError:
+                logger.warning(
+                    "Qdrant lock file exists and is held by another process. "
+                    "If no other instance is running, delete %s manually.", lock_file
+                )
+            except Exception as e:
+                logger.debug("Could not remove Qdrant lock file", error=str(e))
 
         self.client = await asyncio.to_thread(
             QdrantClient,
