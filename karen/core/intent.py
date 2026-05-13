@@ -118,17 +118,21 @@ _COMPARISON_KEYWORDS = [
 
 # 事实查询（需要搜索）
 _FACTUAL_KEYWORDS = [
-    "什么是", "什么是", "为什么", "怎么", "如何",
+    "什么是", "为什么", "怎么", "如何",
     "介绍", "解释", "说明", "原理", "历史",
-    "什么是", "who is", "what is", "how to", "why",
+    "who is", "what is", "how to", "why",
     "search", "find", "look up", "查询", "搜索",
     "最新", "news", "趋势", "trend",
+    # 时效/实时类（覆盖"今天沈阳天气""现在股价"这类隐式时效查询）
+    "今天", "现在", "目前", "近期", "最近",
+    "天气", "股价", "汇率", "新闻", "热点",
+    "today", "weather", "stock", "price", "current",
 ]
 
 # 闲聊
 _CHITCHAT_PATTERNS = [
     r"^\s*(嗯|哦|啊|哈哈|呵呵|嘿嘿)\s*$",
-    r"^\s*(好的|OK|ok|可以|行|没问题)\s*[!.！。]?\s*$",
+    r"^\s*(好的|ok|可以|行|没问题)\s*[!.！。]?\s*$",
     r"^\s*(真的吗|是吗|不会吧|太棒了|厉害了)\s*[?？!.！。]?\s*$",
 ]
 
@@ -146,7 +150,7 @@ def _match_patterns(text: str, patterns: list[str]) -> bool:
     """正则匹配"""
     t = text.strip().lower()
     for p in patterns:
-        if re.search(p, t, re.IGNORECASE):
+        if re.search(p, t):
             return True
     return False
 
@@ -199,10 +203,10 @@ def _rule_classify(query: str) -> Optional[IntentResult]:
         return IntentResult(IntentType.CREATIVE, confidence=0.80,
                             skip_search=True, skip_memory=True, skip_knowledge=True)
 
-    # 8. 对比
+    # 8. 对比 - 一般知识类比较模型自己就会，不浪费 4-5s 等 web search 超时
     if _match_keywords(q, _COMPARISON_KEYWORDS):
         return IntentResult(IntentType.COMPARISON, confidence=0.75,
-                            skip_search=False, skip_memory=False, skip_knowledge=False)
+                            skip_search=True, skip_memory=True, skip_knowledge=True)
 
     # 9. 事实查询（明确需要搜索）
     if _match_keywords(q, _FACTUAL_KEYWORDS):

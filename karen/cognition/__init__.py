@@ -2,11 +2,7 @@
 
 核心模块：
 - types: 认知状态类型定义
-- emotional_state: 情感状态系统
-- inner_monologue: 内心独白引擎
-- intuition: 直觉引擎（系统1）
-- metacognition: 元认知反射
-- persona: 人格系统
+- engine: 五个认知子系统的统一实现(情感/独白/直觉/元认知/人格)
 - human_mind: 统一入口
 
 快速开始：

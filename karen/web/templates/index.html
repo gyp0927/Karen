@@ -93,10 +93,6 @@
                 <span class="tool-label">上传</span>
               </button>
               <input type="file" id="fileInput" style="display: none;" accept=".pdf,.docx,.doc,.txt,.md,.py,.js,.html,.css,.json,.xml,.yaml,.yml">
-              <button class="tool-btn with-label" id="inputModeBtn" title="切换模式">
-                <span id="inputModeIcon">🐇</span>
-                <span class="tool-label" id="inputModeLabel">协调</span>
-              </button>
             </div>
             <div class="file-attachment" id="fileAttachment" style="display: none;">
               <span class="file-attachment-icon">📎</span>
@@ -143,7 +139,7 @@
         </div>
       </div>
       <div class="preview-panel-frame-wrap">
-        <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin"></iframe>
+        <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
       </div>
     </aside>
   </div>
@@ -233,7 +229,8 @@
 
   <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-  <script src="{{ url_for('static', filename='script.js') }}?v=13"></script>
+  <script src="{{ url_for('static', filename='script.js') }}?v=16"></script>
 </body>
 </html>

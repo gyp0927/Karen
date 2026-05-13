@@ -1,5 +1,6 @@
 """FastAPI application factory for Adaptive Memory."""
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI

@@ -17,23 +17,27 @@ def parse_document(file_path: str) -> str:
         # 尝试按文本读取
         try:
             return _parse_text(file_path)
-        except (OSError, UnicodeDecodeError, ValueError) as e:
+        except Exception as e:
             return f"[无法解析文件类型: {ext} - {e}]"
 
 
 def _parse_pdf(file_path: str) -> str:
-    """解析 PDF"""
+    """解析 PDF。pypdf 是 PyPDF2 的现代继任者(PyPDF2 3.x 后已重命名),
+    兼容旧环境时回退到 PyPDF2。"""
     try:
-        import PyPDF2
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            from PyPDF2 import PdfReader
         text = ""
         with open(file_path, "rb") as f:
-            reader = PyPDF2.PdfReader(f)
+            reader = PdfReader(f)
             for page in reader.pages:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
         return text.strip() or "[PDF 内容为空或无法提取文本]"
-    except Exception as e:
+    except (ImportError, OSError, ValueError) as e:
         return f"[PDF 解析失败: {str(e)}]"
 
 
@@ -44,7 +48,7 @@ def _parse_docx(file_path: str) -> str:
         doc = docx.Document(file_path)
         paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
         return "\n".join(paragraphs)
-    except Exception as e:
+    except (ImportError, OSError, ValueError) as e:
         return f"[Word 解析失败: {str(e)}]"
 
 

@@ -7,12 +7,16 @@
 """
 import asyncio
 import logging
+import os
 from typing import Optional, Any
 
 from langchain_core.tools import tool, BaseTool
 from langchain_core.messages import ToolMessage, AIMessage
 
 logger = logging.getLogger(__name__)
+
+# 代码执行默认关闭,需显式开启 ENABLE_CODE_EXECUTION=true
+_CODE_EXEC_ENABLED = os.getenv("ENABLE_CODE_EXECUTION", "false").lower() in ("true", "1", "yes")
 
 
 # ========== 工具定义 ==========
@@ -88,6 +92,8 @@ async def execute_python(code: str) -> str:
     Returns:
         代码执行结果（stdout 输出或错误信息）
     """
+    if not _CODE_EXEC_ENABLED:
+        return "[代码执行已禁用:请在环境变量中设置 ENABLE_CODE_EXECUTION=true 才能启用]"
     try:
         from tools.code_executor import execute_python, format_result
         result = await asyncio.to_thread(execute_python, code)
@@ -110,8 +116,9 @@ DEFAULT_TOOLS: list[BaseTool] = [
     web_search,
     memory_search,
     knowledge_search,
-    execute_python,
 ]
+if _CODE_EXEC_ENABLED:
+    DEFAULT_TOOLS.append(execute_python)
 
 
 def get_available_tools() -> list[BaseTool]:

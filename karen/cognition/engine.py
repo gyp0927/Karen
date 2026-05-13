@@ -8,8 +8,10 @@
 5. PersonaManager - 人格系统(只读 agent 类型 → persona 映射,所有用户共享)
 """
 
+import copy
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -38,21 +40,23 @@ class EmotionalStateManager:
     def __init__(self):
         self._states: dict[tuple[str, str], EmotionalState] = {}
         self._access_times: dict[tuple[str, str], float] = {}
+        self._lock = threading.Lock()
 
     def get_state(self, agent_name: str, sid: str = "") -> EmotionalState:
         key = (sid or "", agent_name)
-        if key not in self._states:
-            # 防止无限制增长：超出上限时清理最久未访问的条目 (LRU)
-            if len(self._states) >= self._MAX_STATES:
-                # 按访问时间排序，移除最旧的 25%
-                sorted_keys = sorted(self._access_times, key=self._access_times.get)
-                to_remove = sorted_keys[:max(1, len(sorted_keys) // 4)]
-                for k in to_remove:
-                    del self._states[k]
-                    del self._access_times[k]
-            self._states[key] = EmotionalState()
-        self._access_times[key] = time.time()
-        return self._states[key]
+        with self._lock:
+            if key not in self._states:
+                # 防止无限制增长：超出上限时清理最久未访问的条目 (LRU)
+                if len(self._states) >= self._MAX_STATES:
+                    # 按访问时间排序，移除最旧的 25%
+                    sorted_keys = sorted(self._access_times, key=self._access_times.get)
+                    to_remove = sorted_keys[:max(1, len(sorted_keys) // 4)]
+                    for k in to_remove:
+                        del self._states[k]
+                        del self._access_times[k]
+                self._states[key] = EmotionalState()
+            self._access_times[key] = time.time()
+            return self._states[key]
 
     def update_after_interaction(
         self, agent_name: str, success: bool = True, complexity: float = 0.5,
@@ -67,8 +71,10 @@ class EmotionalStateManager:
 
     def reset(self, sid: str) -> None:
         """会话结束/切换时清掉这个 sid 的所有 agent 情感状态。"""
-        self._states = {k: v for k, v in self._states.items() if k[0] != (sid or "")}
-        self._access_times = {k: t for k, t in self._access_times.items() if k[0] != (sid or "")}
+        target = sid or ""
+        with self._lock:
+            self._states = {k: v for k, v in self._states.items() if k[0] != target}
+            self._access_times = {k: t for k, t in self._access_times.items() if k[0] != target}
 
     def _respond_to_user_emotion(self, state: EmotionalState, hint: str) -> None:
         hint = hint.lower()
@@ -106,14 +112,13 @@ class InnerMonologueEngine:
             return False
         if self.trigger_mode == self.TRIGGER_ALWAYS:
             return True
+        # <think>/<answer> 会让模型多生成一倍 token,拉高 TTFT;只在真正复杂时触发。
         complexity = self._estimate_complexity(query)
         emotional = cognitive_state.emotional
         return (
-            complexity > 0.5
-            or emotional.confidence < 0.5
-            or emotional.curiosity > 0.7
-            or "?" in query or "？" in query
-            or len(query) > 50
+            complexity > 0.85
+            or (emotional.confidence < 0.4 and emotional.curiosity > 0.7)
+            or len(query) > 200
         )
 
     def _estimate_complexity(self, query: str) -> float:
@@ -213,14 +218,21 @@ INTUITION_PATTERNS = [
 class IntuitionEngine:
     """直觉引擎——模仿人类的系统1思维"""
 
+    _CACHE_TTL_SECONDS = 3600  # 缓存 1 小时过期
+    _CACHE_MAX_SIZE = 1000
+
     def __init__(self):
         self.patterns = INTUITION_PATTERNS
         self._experience_cache: dict[str, IntuitionResult] = {}
+        self._cache_times: dict[str, float] = {}
 
     def classify(self, query: str, history_length: int = 0) -> IntuitionResult:
         cache_key = query.lower().strip()[:50]
+        now = time.time()
         if cache_key in self._experience_cache:
-            return self._experience_cache[cache_key]
+            cached_time = self._cache_times.get(cache_key, 0)
+            if now - cached_time < self._CACHE_TTL_SECONDS:
+                return self._experience_cache[cache_key]
 
         best_match = None
         best_score = 0.0
@@ -251,21 +263,28 @@ class IntuitionEngine:
             result.confidence *= 0.9
 
         self._experience_cache[cache_key] = result
-        if len(self._experience_cache) > 1000:
-            self._experience_cache.clear()
+        self._cache_times[cache_key] = now
+        if len(self._experience_cache) > self._CACHE_MAX_SIZE:
+            # 清理最旧的 50%，避免一次性全部清空导致缓存雪崩
+            sorted_keys = sorted(self._cache_times, key=self._cache_times.get)
+            for k in sorted_keys[:len(sorted_keys) // 2]:
+                self._experience_cache.pop(k, None)
+                self._cache_times.pop(k, None)
         return result
 
     def route_decision(self, query: str, history_length: int = 0) -> dict:
         intuition = self.classify(query, history_length)
+        # 默认 skip_search=True：只有用户明确请求"搜索"或时效信息时才联网。
+        # 普通的 how_to/coding/comparison 模型自己就能答，等 web search 反而浪费 2-5s。
         route_map = {
             "greeting": ("responder", True, True), "gratitude": ("responder", True, True),
             "farewell": ("responder", True, True), "simple_fact": ("responder", True, False),
-            "how_to": ("researcher", False, False), "user_frustrated": ("responder", True, True),
+            "how_to": ("responder", True, False), "user_frustrated": ("responder", True, True),
             "user_happy": ("responder", True, True), "search": ("researcher", False, False),
-            "news": ("researcher", False, True), "coding": ("researcher", False, False),
-            "comparison": ("researcher", False, False), "advice": ("responder", True, False),
-            "emotional_support": ("responder", True, False), "creative": ("responder", True, False),
-            "unknown": ("coordinator", False, False),
+            "news": ("researcher", False, True), "coding": ("responder", True, True),
+            "comparison": ("responder", True, True), "advice": ("responder", True, True),
+            "emotional_support": ("responder", True, False), "creative": ("responder", True, True),
+            "unknown": ("responder", True, False),
         }
         route, skip_search, skip_memory = route_map.get(intuition.intent, ("coordinator", False, False))
         if intuition.should_verify and route != "coordinator":
@@ -405,7 +424,9 @@ class PersonaManager:
         self._personas[agent_name] = persona
 
     def get_persona(self, agent_name: str) -> PersonaConfig:
-        return self._personas.get(agent_name, self._default_persona)
+        """获取人格配置。返回深拷贝防止调用方修改共享状态。"""
+        persona = self._personas.get(agent_name, self._default_persona)
+        return copy.deepcopy(persona)
 
     def get_persona_prompt(self, agent_name: str) -> str:
         return self.get_persona(agent_name).to_system_prompt()

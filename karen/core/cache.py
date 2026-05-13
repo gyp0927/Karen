@@ -22,38 +22,37 @@ _DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 _DB_PATH = os.path.join(_DB_DIR, "cache.db")
 _lock = threading.RLock()
 
-# 默认 TTL：24 小时（秒）
-_DEFAULT_TTL = 24 * 3600
+# 默认 TTL 从 core.config 集中管理
+from core.config import CACHE_DEFAULT_TTL as _DEFAULT_TTL
 
 
 def _get_conn() -> sqlite3.Connection:
     from core.db_utils import get_sqlite_conn
-    return get_sqlite_conn(_DB_PATH)
+    # 线程本地持久连接:避免每次 get/set 都新建 SQLite 连接(每次连接要重做
+    # PRAGMA journal_mode=WAL/synchronous=NORMAL,空响应路径压力下成为瓶颈)。
+    return get_sqlite_conn(_DB_PATH, use_thread_local=True)
 
 
 def init_db():
     """初始化缓存数据库"""
     with _lock:
         conn = _get_conn()
-        try:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS cache_entries (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    key_hash TEXT NOT NULL UNIQUE,
-                    provider TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    messages_preview TEXT NOT NULL,
-                    response TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    expires_at REAL NOT NULL,
-                    hit_count INTEGER DEFAULT 0
-                );
-                CREATE INDEX IF NOT EXISTS idx_cache_hash ON cache_entries(key_hash);
-                CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache_entries(expires_at);
-            """)
-            conn.commit()
-        finally:
-            conn.close()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS cache_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_hash TEXT NOT NULL UNIQUE,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                messages_preview TEXT NOT NULL,
+                response TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                hit_count INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_cache_hash ON cache_entries(key_hash);
+            CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache_entries(expires_at);
+        """)
+        conn.commit()
 
 
 class ResponseCache:
@@ -106,31 +105,29 @@ class ResponseCache:
 
         with _lock:
             conn = _get_conn()
-            try:
-                # 周期性清理过期条目（每 CLEANUP_INTERVAL 次 get 执行一次），
-                # 避免每次读取都触发写操作，提升并发性能
-                self._get_count += 1
-                if self._get_count % self._CLEANUP_INTERVAL == 0:
-                    conn.execute("DELETE FROM cache_entries WHERE expires_at < ?", (time.time(),))
+            # 周期性清理过期条目（每 CLEANUP_INTERVAL 次 get 执行一次），
+            # 避免每次读取都触发写操作，提升并发性能
+            self._get_count += 1
+            if self._get_count % self._CLEANUP_INTERVAL == 0:
+                conn.execute("DELETE FROM cache_entries WHERE expires_at < ?", (time.time(),))
+                conn.commit()
 
-                cursor = conn.execute(
-                    """SELECT response, hit_count FROM cache_entries
-                       WHERE key_hash = ? AND expires_at > ?""",
-                    (key_hash, time.time())
+            cursor = conn.execute(
+                """SELECT response, hit_count FROM cache_entries
+                   WHERE key_hash = ? AND expires_at > ?""",
+                (key_hash, time.time())
+            )
+            row = cursor.fetchone()
+            if row:
+                # 更新命中计数
+                conn.execute(
+                    "UPDATE cache_entries SET hit_count = ? WHERE key_hash = ?",
+                    (row["hit_count"] + 1, key_hash)
                 )
-                row = cursor.fetchone()
-                if row:
-                    # 更新命中计数
-                    conn.execute(
-                        "UPDATE cache_entries SET hit_count = ? WHERE key_hash = ?",
-                        (row["hit_count"] + 1, key_hash)
-                    )
-                    conn.commit()
-                    logger.debug(f"Cache hit: {key_hash[:16]}... (hits={row['hit_count'] + 1})")
-                    return row["response"]
-                return None
-            finally:
-                conn.close()
+                conn.commit()
+                logger.debug(f"Cache hit: {key_hash[:16]}... (hits={row['hit_count'] + 1})")
+                return row["response"]
+            return None
 
     def set(self, messages: list, provider: str, model: str, response: str):
         """将响应写入缓存。"""
@@ -138,8 +135,8 @@ class ResponseCache:
             return
         if self._should_skip_cache(messages):
             return
-        if not response or len(response) < 10:
-            return  # 太短不缓存
+        if not response or len(response) < 5:
+            return  # 太短不缓存（简单数字回答不需要缓存）
 
         key_hash = self._get_cache_key(messages, provider, model)
         now = time.time()
@@ -156,69 +153,57 @@ class ResponseCache:
 
         with _lock:
             conn = _get_conn()
-            try:
-                conn.execute(
-                    """INSERT INTO cache_entries
-                       (key_hash, provider, model, messages_preview, response, created_at, expires_at, hit_count)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-                       ON CONFLICT(key_hash) DO UPDATE SET
-                       response=excluded.response,
-                       created_at=excluded.created_at,
-                       expires_at=excluded.expires_at,
-                       hit_count=0""",
-                    (key_hash, provider, model, preview, response, now, expires)
-                )
-                conn.commit()
-                logger.debug(f"Cache set: {key_hash[:16]}...")
-            finally:
-                conn.close()
+            conn.execute(
+                """INSERT INTO cache_entries
+                   (key_hash, provider, model, messages_preview, response, created_at, expires_at, hit_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                   ON CONFLICT(key_hash) DO UPDATE SET
+                   response=excluded.response,
+                   created_at=excluded.created_at,
+                   expires_at=excluded.expires_at,
+                   hit_count=0""",
+                (key_hash, provider, model, preview, response, now, expires)
+            )
+            conn.commit()
+            logger.debug(f"Cache set: {key_hash[:16]}...")
 
     def invalidate(self, messages: list, provider: str, model: str) -> bool:
         """使指定缓存失效。"""
         key_hash = self._get_cache_key(messages, provider, model)
         with _lock:
             conn = _get_conn()
-            try:
-                cursor = conn.execute("DELETE FROM cache_entries WHERE key_hash = ?", (key_hash,))
-                conn.commit()
-                return cursor.rowcount > 0
-            finally:
-                conn.close()
+            cursor = conn.execute("DELETE FROM cache_entries WHERE key_hash = ?", (key_hash,))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def clear(self):
         """清空所有缓存。"""
         with _lock:
             conn = _get_conn()
-            try:
-                conn.execute("DELETE FROM cache_entries")
-                conn.commit()
-                logger.info("Cache cleared")
-            finally:
-                conn.close()
+            conn.execute("DELETE FROM cache_entries")
+            conn.commit()
+            logger.info("Cache cleared")
 
     def get_stats(self) -> dict:
         """获取缓存统计。"""
         with _lock:
             conn = _get_conn()
-            try:
-                total = conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
-                expired = conn.execute(
-                    "SELECT COUNT(*) FROM cache_entries WHERE expires_at < ?", (time.time(),)
-                ).fetchone()[0]
-                total_hits = conn.execute(
-                    "SELECT COALESCE(SUM(hit_count), 0) FROM cache_entries"
-                ).fetchone()[0]
-                db_size = os.path.getsize(_DB_PATH) if os.path.exists(_DB_PATH) else 0
-                return {
-                    "enabled": self.enabled,
-                    "ttl_hours": self.ttl / 3600,
-                    "total_entries": total,
-                    "expired_entries": expired,
-                    "total_hits": total_hits,
-                    "db_size_bytes": db_size,
-                }
-            finally:
-                conn.close()
+            total = conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
+            expired = conn.execute(
+                "SELECT COUNT(*) FROM cache_entries WHERE expires_at < ?", (time.time(),)
+            ).fetchone()[0]
+            total_hits = conn.execute(
+                "SELECT COALESCE(SUM(hit_count), 0) FROM cache_entries"
+            ).fetchone()[0]
+            db_size = os.path.getsize(_DB_PATH) if os.path.exists(_DB_PATH) else 0
+            return {
+                "enabled": self.enabled,
+                "ttl_hours": self.ttl / 3600,
+                "total_entries": total,
+                "expired_entries": expired,
+                "total_hits": total_hits,
+                "db_size_bytes": db_size,
+            }
 
 
 # 全局缓存实例

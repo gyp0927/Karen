@@ -25,7 +25,7 @@ _MAX_FETCH_WORKERS = 3
 _MAX_RETRIES = 2
 
 # 快速模式专用超时（ aggressive —— 快速模式追求速度而非 completeness ）
-_FAST_SEARCH_TIMEOUT = 6
+_FAST_SEARCH_TIMEOUT = 4
 _FAST_FETCH_TIMEOUT = 3
 _FAST_MAX_RETRIES = 1
 _FAST_MAX_FETCH_WORKERS = 2
@@ -166,12 +166,12 @@ def _dedupe_results(results: list[dict], max_results: int) -> list[dict]:
 
 # ========== 1. duckduckgo-search 库 ==========
 
-def _try_ddg_library(query: str, max_results: int) -> list[dict] | None:
+def _try_ddg_library(query: str, max_results: int, timeout: int = _SEARCH_TIMEOUT) -> list[dict] | None:
     """使用 ddgs 库搜索。"""
     try:
         from ddgs import DDGS
         proxies = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-        with DDGS(timeout=_SEARCH_TIMEOUT, proxy=proxies) as ddgs:
+        with DDGS(timeout=timeout, proxy=proxies) as ddgs:
             raw = ddgs.text(query, max_results=max_results * 2)
             results = []
             for item in raw:
@@ -221,12 +221,12 @@ def _parse_360_html(html: str, max_results: int) -> list[dict]:
     return _dedupe_results(results, max_results)
 
 
-def _so_search(query: str, max_results: int) -> list[dict] | None:
+def _so_search(query: str, max_results: int, timeout: int = _SEARCH_TIMEOUT) -> list[dict] | None:
     """使用 360 搜索（国内无需代理）。"""
     import urllib.parse
     encoded = urllib.parse.quote(query)
     url = f"https://www.so.com/s?q={encoded}"
-    html = _fetch(url, timeout=_SEARCH_TIMEOUT)
+    html = _fetch(url, timeout=timeout)
     results = _parse_360_html(html, max_results)
     return results if results else None
 
@@ -259,11 +259,11 @@ def _parse_bing_html(html: str, max_results: int) -> list[dict]:
     return _dedupe_results(results, max_results)
 
 
-def _bing_search(query: str, max_results: int) -> list[dict] | None:
+def _bing_search(query: str, max_results: int, timeout: int = _SEARCH_TIMEOUT) -> list[dict] | None:
     import urllib.parse
     encoded = urllib.parse.quote(query)
     url = f"https://www.bing.com/search?q={encoded}&setmkt=en-US&setlang=en"
-    html = _fetch(url, timeout=_SEARCH_TIMEOUT)
+    html = _fetch(url, timeout=timeout)
     results = _parse_bing_html(html, max_results)
     return results if results else None
 
@@ -284,8 +284,14 @@ def duckduckgo_search(query: str, max_results: int = 2, fast_mode: bool = False)
     if cached is not None:
         return cached
 
-    has_chinese = bool(_CJK_RE.search(query))
-    if has_chinese:
+    # 快速模式仍保留一条 fallback：中文 query 先 360(国内可达),非中文先 DDG。
+    # Why: 之前 fast 只挂 DDG,在国内网络下 DDG 直接抓不到,中文 query 返回 0 结果。
+    is_cn = bool(_CJK_RE.search(query))
+    if fast_mode:
+        # fast mode 只用一个最快源，不 fallback 到慢源（避免拖累整体响应）
+        sources = [("360_search", _so_search)] if is_cn \
+            else [("ddg_library", _try_ddg_library)]
+    elif is_cn:
         sources = [
             ("360_search", _so_search),
             ("bing", _bing_search),
@@ -298,7 +304,6 @@ def duckduckgo_search(query: str, max_results: int = 2, fast_mode: bool = False)
             ("bing", _bing_search),
         ]
 
-    # 快速模式：减少重试，缩短超时
     max_retries = _FAST_MAX_RETRIES if fast_mode else _MAX_RETRIES
     search_timeout = _FAST_SEARCH_TIMEOUT if fast_mode else _SEARCH_TIMEOUT
 
@@ -307,18 +312,7 @@ def duckduckgo_search(query: str, max_results: int = 2, fast_mode: bool = False)
     for source_name, source_fn in sources:
         for attempt in range(max_retries):
             try:
-                # 快速模式下给 source_fn 传更短超时（通过闭包捕获的全局变量控制）
-                if fast_mode:
-                    # 临时修改全局超时，source_fn 内部使用这些全局变量
-                    orig_timeout = globals().get('_SEARCH_TIMEOUT')
-                    globals()['_SEARCH_TIMEOUT'] = search_timeout
-                    try:
-                        results = source_fn(query, max_results)
-                    finally:
-                        if orig_timeout is not None:
-                            globals()['_SEARCH_TIMEOUT'] = orig_timeout
-                else:
-                    results = source_fn(query, max_results)
+                results = source_fn(query, max_results, timeout=search_timeout)
                 if results:
                     logger.info(
                         f"Search '{query}' via {source_name}: {len(results)} results"

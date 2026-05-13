@@ -36,10 +36,8 @@ async def test_coordination_graph():
 @test("图编译 - 快速模式")
 async def test_fast_graph():
     from graph.orchestrator import create_fast_graph
-    from agents.search import web_searcher_agent, memory_searcher_agent
-    from agents.tools import tool_caller_node
     from agents.nodes import responder_node
-    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node)
+    graph = create_fast_graph(responder_node)
     assert graph is not None
 
 @test("图编译 - 审查模式")
@@ -229,12 +227,10 @@ async def test_chat_coordination():
 @test("端到端 - 快速模式")
 async def test_chat_fast():
     from graph.orchestrator import create_fast_graph
-    from agents.search import web_searcher_agent, memory_searcher_agent
-    from agents.tools import tool_caller_node
     from agents.nodes import responder_node
     from langchain_core.messages import HumanMessage
 
-    graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder_node)
+    graph = create_fast_graph(responder_node)
     initial_state = {
         "messages": [HumanMessage(content="你好")],
         "active_agent": None,

@@ -16,7 +16,7 @@ import random
 
 from .emotion_system import EmotionSystem
 from .memory_system import MemorySystem
-from .global_workspace import GlobalWorkspace
+from .global_workspace import GlobalWorkspace, WorkspaceContent
 from .metacognition import Metacognition
 
 
@@ -284,16 +284,29 @@ class ThinkingProcess:
 
         # 4. 将内容推入全局工作空间
         candidates = [
-            {"content": ctx.input_text, "type": "perception", "salience": 0.9},
-            {"content": understanding, "type": "understanding", "salience": 0.8},
+            WorkspaceContent(
+                content=ctx.input_text,
+                content_type="perception",
+                source_module="thinking_process",
+                salience=0.9
+            ),
+            WorkspaceContent(
+                content=understanding,
+                content_type="understanding",
+                source_module="thinking_process",
+                salience=0.8
+            ),
         ]
 
         if internal_monologue:
-            candidates.append({
-                "content": internal_monologue,
-                "type": "inner_speech",
-                "salience": 0.6
-            })
+            candidates.append(WorkspaceContent(
+                content=internal_monologue,
+                content_type="inner_speech",
+                source_module="metacognition",
+                salience=0.6
+            ))
+
+        self.workspace.compete(candidates)
 
         # 情感调节（如果需要）
         regulation_result = None

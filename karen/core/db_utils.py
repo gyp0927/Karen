@@ -2,9 +2,12 @@
 import os
 import sqlite3
 import threading
+import time
 
 
 _THREAD_LOCAL = threading.local()
+# 线程本地连接最大存活时间（秒），超时后自动重建，避免连接无限累积
+_CONN_MAX_AGE_S = 300
 
 
 def get_sqlite_conn(
@@ -32,9 +35,20 @@ def get_sqlite_conn(
         os.makedirs(db_dir, exist_ok=True)
 
     if use_thread_local:
-        conn = getattr(_THREAD_LOCAL, f"conn_{db_path}", None)
-        if conn is not None:
+        conn_key = f"conn_{db_path}"
+        ts_key = f"conn_ts_{db_path}"
+        conn = getattr(_THREAD_LOCAL, conn_key, None)
+        ts = getattr(_THREAD_LOCAL, ts_key, 0)
+        now = time.time()
+        if conn is not None and (now - ts) < _CONN_MAX_AGE_S:
             return conn
+        # 连接过期或不存在：关闭旧连接（如果存在）
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            setattr(_THREAD_LOCAL, conn_key, None)
 
     conn = sqlite3.connect(db_path, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
@@ -46,6 +60,21 @@ def get_sqlite_conn(
         conn.execute("PRAGMA synchronous=NORMAL")
 
     if use_thread_local:
-        setattr(_THREAD_LOCAL, f"conn_{db_path}", conn)
+        setattr(_THREAD_LOCAL, conn_key, conn)
+        setattr(_THREAD_LOCAL, ts_key, time.time())
 
     return conn
+
+
+def close_thread_local_conn(db_path: str) -> None:
+    """关闭指定 db_path 的线程本地连接（用于显式清理）。"""
+    conn_key = f"conn_{db_path}"
+    ts_key = f"conn_ts_{db_path}"
+    conn = getattr(_THREAD_LOCAL, conn_key, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        setattr(_THREAD_LOCAL, conn_key, None)
+        setattr(_THREAD_LOCAL, ts_key, 0)

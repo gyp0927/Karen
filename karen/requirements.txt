@@ -7,3 +7,4 @@ langgraph>=0.2.0
 eventlet>=0.35.0
 pywebview>=5.0
 mcp>=1.20.0
+pypdf>=4.0.0

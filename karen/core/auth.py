@@ -31,6 +31,39 @@ _lock = threading.RLock()
 AUTH_ENABLED = os.getenv("ENABLE_AUTH", "false").lower() in ("true", "1", "yes")
 
 
+# ========== Per-IP 限流(防 API Key 暴力枚举) ==========
+# 在 _AUTH_RATE_WINDOW 秒内累计失败 _AUTH_RATE_MAX 次,后续 _AUTH_RATE_BLOCK 秒拒绝。
+# 不持久化:进程重启重置,够防自动化扫,不影响合法用户偶尔输错。
+_AUTH_RATE_WINDOW = 60.0
+_AUTH_RATE_MAX = 5
+_AUTH_RATE_BLOCK = 300.0
+_auth_failures: dict[str, list[float]] = {}
+_auth_rate_lock = threading.RLock()
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """True 表示允许尝试,False 表示限流中。空 ip 不限流(本地调用)。"""
+    if not ip:
+        return True
+    now = time.time()
+    with _auth_rate_lock:
+        attempts = [t for t in _auth_failures.get(ip, []) if now - t < _AUTH_RATE_BLOCK]
+        if attempts:
+            _auth_failures[ip] = attempts
+        else:
+            _auth_failures.pop(ip, None)
+        recent = sum(1 for t in attempts if now - t < _AUTH_RATE_WINDOW)
+        return recent < _AUTH_RATE_MAX
+
+
+def _record_auth_failure(ip: str) -> None:
+    if not ip:
+        return
+    now = time.time()
+    with _auth_rate_lock:
+        _auth_failures.setdefault(ip, []).append(now)
+
+
 def _get_conn() -> sqlite3.Connection:
     from core.db_utils import get_sqlite_conn
     return get_sqlite_conn(_DB_PATH, enable_wal=False)
@@ -98,9 +131,17 @@ def create_user(name: str, api_key: str, config: dict = None) -> User:
             conn.close()
 
 
-def authenticate(api_key: str) -> Optional[User]:
-    """验证 API Key，返回用户对象。"""
+def authenticate(api_key: str, ip: str = "") -> Optional[User]:
+    """验证 API Key,返回用户对象。
+
+    ip 用于触发 per-IP 失败次数限流,防止 API Key 暴力枚举。
+    本地内部调用可省略 ip。
+    """
     if not api_key:
+        return None
+
+    if not _check_rate_limit(ip):
+        logger.warning(f"Auth rate-limited from ip={ip}")
         return None
 
     with _lock:
@@ -113,11 +154,15 @@ def authenticate(api_key: str) -> Optional[User]:
             )
             row = cursor.fetchone()
             if row:
+                # 认证成功：清除该 IP 的失败记录，避免合法用户被累积失败拖入限流
+                with _auth_rate_lock:
+                    _auth_failures.pop(ip, None)
                 return User(
                     row["id"],
                     row["name"],
                     json.loads(row["config_json"] or "{}")
                 )
+            _record_auth_failure(ip)
             return None
         finally:
             conn.close()
@@ -203,7 +248,8 @@ def auth_required(f):
             return f(*args, **kwargs)
 
         api_key = request.headers.get("X-API-Key", "") or request.cookies.get("api_key", "")
-        user = authenticate(api_key)
+        ip = request.remote_addr or ""
+        user = authenticate(api_key, ip=ip)
         if not user:
             return {"success": False, "message": "未认证，请提供有效的 API Key"}, 401
 

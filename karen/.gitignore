@@ -32,5 +32,8 @@ web/generated_files/
 # 日志
 *.log
 
+# 临时测试文件（含 API key，不上传）
+test_kimi_*.py
+
 # Windows 批处理文件
 *.bat

@@ -335,7 +335,7 @@ class MemoryPipeline:
             # 动态导入 RAG 模块，避免循环依赖
             try:
                 import importlib
-                rag = importlib.import_module("core.rag")
+                rag = importlib.import_module("hot_and_cold_memory.core.rag")
                 archived_count = await rag.add_document(
                     archive_text,
                     source=archive_source,

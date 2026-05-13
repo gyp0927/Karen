@@ -4,10 +4,6 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 
-from agents.tools import _need_tool_call
-
-# 认知系统导入
-from cognition.intuition import get_intuition_engine
 from cognition.types import ThinkingMode
 
 
@@ -15,10 +11,8 @@ class AgentState(TypedDict):
     """多Agent共享状态（加入认知状态）
 
     NOTE: ``messages`` 用 LangGraph 默认的 ``add`` reducer(list concat)。
-    fast_graph 多个 searcher 通过 Send 并行写时,完成时序不确定;但每个 searcher
-    输出的 SystemMessage 已带 ``name``(search_web / search_memory / tool_caller),
-    ``_run_agent`` 在传给 LLM 前会把相邻具名 SystemMessage 按 name 排序,
-    保证 LLM 看到的上下文顺序确定可复现。
+    当前 fast_graph 为单 Responder 节点，搜索在 responder 内部异步并行处理，
+    不再通过外部 LangGraph 节点并行写入，因此不存在排序问题。
     """
     messages: Annotated[Sequence[BaseMessage], add]
     active_agent: str | None
@@ -155,167 +149,16 @@ def create_coordination_graph(coordinator_agent, researcher_agent, tool_caller, 
     return workflow.compile()
 
 
-async def _search_node(
-    state: AgentState,
-    search_fn: callable,
-    skip_key: str,
-    name: str = "",
-) -> dict:
-    """通用搜索节点。
+def create_fast_graph(responder_agent):
+    """快速模式：单 Responder 节点。
 
-    Args:
-        name: 给输出的 SystemMessage 打上 name 标签,供 _run_agent 在传给 LLM
-              前按 name 排序,保证多个并行 searcher 结果顺序确定。
+    搜索和工具调用在 responder 内部异步处理，
+    不再需要外部 web_searcher / memory_searcher / tool_caller 节点，
+    减少 LangGraph 调度开销和并行等待时间。
     """
-    msgs = state.get("messages", [])
-    query = msgs[-1].content if msgs else ""
-    intent = state.get("task_context", {}).get("intent_result")
-    if intent and intent.get(skip_key):
-        return _make_result_with_cognitive_state(state, {"messages": []})
-
-    user_id = state.get("task_context", {}).get("user_id", "")
-    session_id = state.get("task_context", {}).get("session_id", "")
-    fast_mode = state.get("task_context", {}).get("mode") in ("fast", "planning")
-    result = await search_fn(query, user_id, session_id=session_id, fast_mode=fast_mode)
-    if result:
-        from langchain_core.messages import SystemMessage
-        # SystemMessage 必须显式指令"基于以上结果"，否则 LLM 会忽略检索文本回退到训练知识。
-        # 与 coordination 模式 researcher_node 的 wrapping 保持一致。
-        msg = SystemMessage(
-            content=(
-                f"{result}\n\n"
-                "请基于以上搜索结果生成最终回答，"
-                "涉及实时信息、最新数据、价格、天气等时效内容时，"
-                "优先以此处的搜索结果为准，而非你的训练知识。"
-            ),
-        )
-        if name:
-            msg.name = name
-        return _make_result_with_cognitive_state(state, {"messages": [msg]})
-    return _make_result_with_cognitive_state(state, {"messages": []})
-
-
-def _route_from_intent(
-    state: AgentState,
-    skip_search: bool,
-    skip_memory: bool,
-    need_tools: bool,
-    source: str,
-    confidence: float = 0.0,
-    intent: str = "",
-):
-    """根据意图结果执行统一路由。
-
-    NOTE: LangGraph 要求状态不可变。此处对 state 的修改发生在
-    条件边路由函数内部，属于历史遗留。实际运行时通过 Send 传递的
-    state 是各节点 reducer 后的新副本，因此不会造成并发问题。
-    为遵循约定，仍使用浅拷贝避免原地修改共享引用。
-    """
-    task_context = dict(state.get("task_context", {}))
-    task_context["intent_result"] = {
-        "intent": intent,
-        "confidence": confidence,
-        "skip_search": skip_search,
-        "skip_memory": skip_memory,
-        "skip_knowledge": skip_search,
-        "source": source,
-    }
-    state = dict(state)
-    state["task_context"] = task_context
-    # 深拷贝 messages 列表，避免共享引用导致 LangGraph reducer 异常
-    import copy
-    state["messages"] = copy.deepcopy(state.get("messages", []))
-
-    if skip_search and skip_memory and not need_tools:
-        return Send("responder", state)
-
-    sends = []
-    if not skip_search:
-        sends.append(Send("web_searcher", state))
-    if not skip_memory:
-        sends.append(Send("memory_searcher", state))
-    if need_tools:
-        sends.append(Send("tool_caller", state))
-    if not sends:
-        return Send("responder", state)
-    return sends
-
-
-def create_fast_graph(web_searcher, memory_searcher, tool_caller, responder_agent):
-    """快速/计划模式：并行 WebSearcher + MemorySearcher + ToolCaller → Responder
-
-    无 Coordinator，三个子 Agent 按需并行执行，Responder 只负责生成。
-    """
-
-    async def web_searcher_node(state: AgentState) -> dict:
-        return await _search_node(state, web_searcher, "skip_search", name="search_web")
-
-    async def memory_searcher_node(state: AgentState) -> dict:
-        return await _search_node(state, memory_searcher, "skip_memory", name="search_memory")
-
-    async def tool_caller_node(state: AgentState) -> dict:
-        return await tool_caller(state)
-
-    def start_parallel_search(state: AgentState):
-        """快速模式路由：按需并行启动子 Agent。"""
-        from core.intent import classify_intent_sync
-
-        query = state["messages"][-1].content
-        history = state.get("messages", [])
-        history_turns = len(history) // 2
-        need_tools = _need_tool_call(query)
-
-        intuition = get_intuition_engine()
-        intuition_result = intuition.route_decision(query, history_turns)
-
-        import copy
-        state = copy.deepcopy(state)
-        task_ctx = dict(state.get("task_context", {}))
-        task_ctx["intuition_result"] = intuition_result
-        task_ctx["thinking_mode"] = intuition_result["thinking_mode"].value
-        state["task_context"] = task_ctx
-
-        if intuition_result["intuition_confidence"] > 0.7:
-            return _route_from_intent(
-                state,
-                skip_search=intuition_result["skip_search"],
-                skip_memory=intuition_result["skip_memory"],
-                need_tools=need_tools,
-                source="intuition",
-                confidence=intuition_result["intuition_confidence"],
-                intent=intuition_result["route"],
-            )
-
-        result = classify_intent_sync(query, history=history)
-        return _route_from_intent(
-            state,
-            skip_search=result.skip_search,
-            skip_memory=result.skip_memory,
-            need_tools=need_tools,
-            source=result.source,
-            confidence=result.confidence,
-            intent=result.intent,
-        )
-
     workflow = StateGraph(AgentState)
-    workflow.add_node("web_searcher", web_searcher_node)
-    workflow.add_node("memory_searcher", memory_searcher_node)
-    workflow.add_node("tool_caller", tool_caller_node)
     workflow.add_node("responder", responder_agent)
-
-    workflow.add_conditional_edges(
-        "__start__",
-        start_parallel_search,
-        {
-            "web_searcher": "web_searcher",
-            "memory_searcher": "memory_searcher",
-            "tool_caller": "tool_caller",
-            "responder": "responder",
-        }
-    )
-    workflow.add_edge("web_searcher", "responder")
-    workflow.add_edge("memory_searcher", "responder")
-    workflow.add_edge("tool_caller", "responder")
+    workflow.set_entry_point("responder")
     workflow.add_edge("responder", END)
     return workflow.compile()
 

@@ -1,8 +1,10 @@
 """LLM 基础设施 - HTTP 客户端、配置管理和实例缓存。"""
 
+import asyncio
 import json
 import logging
 import threading
+from collections import OrderedDict
 from typing import Optional, Callable
 
 from langchain_openai import ChatOpenAI
@@ -10,25 +12,54 @@ from langchain_openai import ChatOpenAI
 logger = logging.getLogger(__name__)
 
 # ========== HTTP 客户端 ==========
+# httpx.AsyncClient 绑定在第一次使用它的 event loop 上,跨 loop 复用会
+# 抛 "Event loop is closed"。Flask-SocketIO threading 模式下,每次请求
+# 都新建 loop,所以必须按 loop id 隔离 client。
 
-_httpx_client = None
+_httpx_clients: "OrderedDict[int, object]" = OrderedDict()
+_httpx_lock = threading.Lock()
+_HTTPX_MAX_LOOPS = 8
 
 
-def _get_http_client():
-    """获取全局共享的 httpx.Client，启用连接池复用。"""
-    global _httpx_client
-    if _httpx_client is None:
+def _get_http_async_client():
+    """获取与当前 event loop 绑定的 httpx.AsyncClient。"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    loop_id = id(loop)
+    with _httpx_lock:
+        client = _httpx_clients.get(loop_id)
+        if client is not None:
+            _httpx_clients.move_to_end(loop_id)
+            return client
         try:
             import httpx
-            _httpx_client = httpx.Client(
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
+            client = httpx.AsyncClient(
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=20,
+                    keepalive_expiry=300.0,
+                ),
                 timeout=httpx.Timeout(60.0, connect=5.0),
             )
-            logger.info("HTTP client pool initialized (keepalive=30s, max=100)")
         except ImportError:
             logger.warning("httpx not installed, falling back to default HTTP client")
             return None
-    return _httpx_client
+        _httpx_clients[loop_id] = client
+        if len(_httpx_clients) > _HTTPX_MAX_LOOPS:
+            _, old_client = _httpx_clients.popitem(last=False)
+
+            def _close_client(client):
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(client.aclose())
+                finally:
+                    loop.close()
+
+            threading.Thread(target=_close_client, args=(old_client,), daemon=True).start()
+        logger.debug(f"Async HTTP client created for loop {loop_id}")
+        return client
 
 
 # ========== LLM 配置隔离 ==========
@@ -62,9 +93,12 @@ def clear_streaming_callback(sid: str = ""):
 
 
 # ========== LLM 实例管理 ==========
+# 实例内部持有按 loop 绑定的 httpx client,所以缓存键也要含 loop id,
+# 否则换 loop 时旧实例的 client 已失效。
 
-_llm_cache: dict[str, ChatOpenAI] = {}
+_llm_cache: "OrderedDict[tuple, ChatOpenAI]" = OrderedDict()
 _llm_cache_lock = threading.Lock()
+_LLM_CACHE_MAX = 16
 
 
 def _build_llm_kwargs(sid: str = "") -> dict:
@@ -118,16 +152,24 @@ def _make_cache_key(kwargs: dict) -> str:
 def get_llm(sid: str = "") -> ChatOpenAI:
     """获取 LLM 实例（带缓存）。"""
     kwargs = _build_llm_kwargs(sid)
-    cache_key = _make_cache_key(kwargs)
+    try:
+        loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        loop_id = 0
+    cache_key = (loop_id, _make_cache_key(kwargs))
     with _llm_cache_lock:
         if cache_key in _llm_cache:
+            _llm_cache.move_to_end(cache_key)
             return _llm_cache[cache_key]
         logger.debug(f"Creating new LLM instance for model={kwargs.get('model')}")
-        http_client = _get_http_client()
-        if http_client:
-            kwargs["http_client"] = http_client
+        http_async_client = _get_http_async_client()
+        if http_async_client:
+            kwargs["http_async_client"] = http_async_client
+        kwargs["streaming"] = True
         instance = ChatOpenAI(**kwargs)
         _llm_cache[cache_key] = instance
+        if len(_llm_cache) > _LLM_CACHE_MAX:
+            _llm_cache.popitem(last=False)
         return instance
 
 
@@ -136,3 +178,22 @@ def clear_llm_cache():
     with _llm_cache_lock:
         _llm_cache.clear()
     logger.info("LLM cache cleared")
+
+
+async def warmup_connection(sid: str = "") -> bool:
+    """预热 LLM 连接 — 提前建立 TCP/TLS 连接,减少首 token 延迟。
+
+    在服务器启动时调用一次,让 HTTP 连接池和目标 API 之间保持长连接。
+    预热失败不抛异常,避免阻塞启动流程。
+    """
+    try:
+        llm = get_llm(sid)
+        # 发送一个极短请求触发连接建立,但不等待完整响应
+        from langchain_core.messages import HumanMessage
+        async for _ in llm.astream([HumanMessage(content="hi")]):
+            break  # 只取第一个 chunk 就断,目的是建连
+        logger.info("LLM connection warmed up")
+        return True
+    except Exception as e:
+        logger.warning(f"Connection warmup failed (non-critical): {e}")
+        return False

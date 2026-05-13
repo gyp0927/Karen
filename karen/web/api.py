@@ -907,7 +907,7 @@ def login_api():
         api_key = data.get("apiKey", "").strip()
         if not api_key:
             return {"success": False, "message": "请提供 API Key"}, 400
-        user = authenticate(api_key)
+        user = authenticate(api_key, ip=request.remote_addr or "")
         if not user:
             return {"success": False, "message": "API Key 无效"}, 401
         return {"success": True, "user": user.to_dict()}
@@ -917,8 +917,9 @@ def login_api():
 
 
 @api_bp.route("/api/auth/users", methods=["GET"])
+@auth_required
 def list_users_api():
-    """列出所有用户"""
+    """列出所有用户(需认证 + LOCAL_ONLY 双重保护)"""
     if not AUTH_ENABLED:
         return {"success": False, "message": "认证系统未启用"}, 400
     try:
@@ -929,11 +930,16 @@ def list_users_api():
 
 
 @api_bp.route("/api/auth/users/<user_id>", methods=["DELETE"])
+@auth_required
 def delete_user_api(user_id):
-    """删除用户"""
+    """删除用户(需认证 + LOCAL_ONLY 双重保护)。用户只能删除自己。"""
     if not AUTH_ENABLED:
         return {"success": False, "message": "认证系统未启用"}, 400
     try:
+        from core.auth import get_current_user
+        current_user = get_current_user()
+        if not current_user or current_user.id != user_id:
+            return {"success": False, "message": "只能删除自己的账号"}, 403
         if delete_user(user_id):
             return {"success": True, "message": "用户已删除"}
         return {"success": False, "message": "用户不存在"}, 404

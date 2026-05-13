@@ -20,17 +20,15 @@ from typing import Optional
 from langchain_core.messages import AIMessage
 
 from cognition.types import CognitiveState, ThinkingMode
-from cognition.inner_monologue import (
+from cognition.engine import (
     get_monologue_engine,
     wrap_prompt_with_monologue,
-)
-from cognition.emotional_state import (
     get_emotional_manager,
     inject_emotion_to_prompt,
+    get_intuition_engine,
+    get_metacognition_engine,
+    get_persona_manager,
 )
-from cognition.intuition import get_intuition_engine
-from cognition.metacognition import get_metacognition_engine
-from cognition.persona import get_persona_manager
 
 logger = logging.getLogger(__name__)
 

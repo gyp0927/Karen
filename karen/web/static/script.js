@@ -1,10 +1,32 @@
 // ============ 凯伦 Client ============
 
+// HTML escape helper to prevent XSS
+function escapeHtml(text) {
+  if (text == null) return "";
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 // AI 头像。图片放在 web/static/img/avatar.png(由用户提供)。
 // object-fit: cover 让图按容器中心裁切,32x32 圆角框里只露脸部。
 const ASSISTANT_AVATAR = `<img src="/static/img/avatar.png" alt="凯伦" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block">`;
 
-const socket = io();
+// 在 Socket.IO 连接前先加载用户配置，使 API Key 通过 auth handshake 传递（不入日志）
+let userConfig = null;
+try {
+  const raw = sessionStorage.getItem("user_llm_config");
+  if (raw) userConfig = JSON.parse(raw);
+} catch (e) {
+  userConfig = null;
+}
+
+const socket = io({
+  auth: userConfig ? { api_key: userConfig.apiKey } : {}
+});
 
 // DOM Elements
 const chatMessages = document.getElementById("chatMessages");
@@ -32,9 +54,6 @@ const fileInput = document.getElementById("fileInput");
 const fileAttachment = document.getElementById("fileAttachment");
 const fileAttachmentName = document.getElementById("fileAttachmentName");
 const fileAttachmentRemove = document.getElementById("fileAttachmentRemove");
-const inputModeBtn = document.getElementById("inputModeBtn");
-const inputModeIcon = document.getElementById("inputModeIcon");
-const inputModeLabel = document.getElementById("inputModeLabel");
 
 // State
 let isProcessing = false;
@@ -46,7 +65,6 @@ let currentSessionId = "";
 let currentMode = "fast";
 let fastMode = true;
 let attachedFile = null; // { filename, content }
-let userConfig = null;   // { provider, model, apiKey, name } LAN 用户的本地配置
 
 // Preview Panel DOM (initialized later)
 const previewFrame = document.getElementById("previewFrame");
@@ -85,6 +103,18 @@ applyTheme(currentTheme);
 
 // ============ Markdown Renderer ============
 
+// 安全渲染：CDN 加载失败时回退到纯文本
+function safeRenderMarkdown(text) {
+  if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+    return escapeHtml(text);
+  }
+  try {
+    return DOMPurify.sanitize(marked.parse(text));
+  } catch (e) {
+    return escapeHtml(text);
+  }
+}
+
 marked.setOptions({
   breaks: true,
   gfm: true,
@@ -94,7 +124,7 @@ marked.setOptions({
 const renderer = new marked.Renderer();
 
 renderer.code = function(code, language) {
-  const lang = language || "";
+  const lang = escapeHtml(language || "");
   const escaped = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const isHtml = lang.toLowerCase() === "html" || lang.toLowerCase() === "htm";
   const codeId = "cb-" + Math.random().toString(36).substr(2, 9);
@@ -222,6 +252,20 @@ function previewHtml(btn) {
       showToast("无法获取代码内容", "error");
       return;
     }
+
+    // 消毒：移除危险标签和事件处理器，防止 XSS
+    if (typeof DOMPurify !== "undefined") {
+      code = DOMPurify.sanitize(code, {
+        ALLOWED_TAGS: ['p','div','span','h1','h2','h3','h4','h5','h6','br','hr',
+          'strong','b','em','i','u','strike','del','a','img',
+          'ul','ol','li','table','thead','tbody','tr','th','td',
+          'pre','code','blockquote','sup','sub','style'],
+        ALLOWED_ATTR: ['href','title','alt','src','width','height','class','id',
+          'style','target','rel','charset','name','content','lang'],
+        ALLOW_DATA_ATTR: false,
+      });
+    }
+
     previewContent = code;
     previewFilename = `preview-${Date.now()}.html`;
 
@@ -322,12 +366,6 @@ function showEmptyState(show) {
   chatMessages.style.display = show ? "none" : "block";
 }
 
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-
 function appendMessage(content, type, sender, stream = false) {
   showEmptyState(false);
   messageCount++;
@@ -371,45 +409,13 @@ function appendMessage(content, type, sender, stream = false) {
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
-    if (stream && content.length > 20) {
-      // 长内容用打字机效果
-      typeStreamText(div.querySelector(".message-content"), content, () => {
-        div.querySelectorAll("pre code").forEach(block => {
-          hljs.highlightElement(block);
-        });
-      });
-    } else {
-      // 短内容直接显示
-      div.querySelector(".message-content").innerHTML = marked.parse(content);
-      div.querySelectorAll("pre code").forEach(block => {
-        hljs.highlightElement(block);
-      });
-    }
+    div.querySelector(".message-content").innerHTML = safeRenderMarkdown(content);
+    div.querySelectorAll("pre code").forEach(block => {
+      hljs.highlightElement(block);
+    });
   }
 
   return div;
-}
-
-function typeStreamText(element, text, onComplete) {
-  // 将 Markdown 文本逐字追加
-  let i = 0;
-  let currentText = "";
-  const speed = text.length > 500 ? 5 : 10; // 长文更快
-
-  function tick() {
-    if (i < text.length) {
-      // 一次追加多个字符加速
-      const chunkSize = text.length > 1000 ? 3 : 1;
-      currentText += text.slice(i, i + chunkSize);
-      i += chunkSize;
-      element.innerHTML = marked.parse(currentText);
-      chatMessages.scrollTop = chatMessages.scrollHeight;
-      requestAnimationFrame(() => setTimeout(tick, speed));
-    } else {
-      if (onComplete) onComplete();
-    }
-  }
-  tick();
 }
 
 function clearMessages() {
@@ -494,11 +500,6 @@ if (themeToggleBtn) {
   });
 }
 
-// 隐藏模式切换按钮（只保留快速模式）
-if (inputModeBtn) {
-  inputModeBtn.style.display = "none";
-}
-
 // File upload
 if (uploadBtn && fileInput) {
   uploadBtn.addEventListener("click", () => {
@@ -550,12 +551,6 @@ if (fileAttachmentRemove) {
   });
 }
 
-// 模式固定为快速模式，UI 不显示切换按钮
-function updateModeUI(mode) {
-  currentMode = "fast";
-  fastMode = true;
-}
-
 // ============ Session Management ============
 
 function renderSessionList() {
@@ -567,12 +562,12 @@ function renderSessionList() {
   }
 
   sidebarHistory.innerHTML = sessions.map(s => `
-    <div class="history-item ${s.is_current ? 'active' : ''}" data-session-id="${s.id}">
+    <div class="history-item ${s.is_current ? 'active' : ''}" data-session-id="${escapeHtml(s.id)}">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
       </svg>
       <span class="history-title">${escapeHtml(s.title)}</span>
-      <button class="delete-session-btn" data-session-id="${s.id}" title="删除">
+      <button class="delete-session-btn" data-session-id="${escapeHtml(s.id)}" title="删除">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"></line>
           <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -580,29 +575,28 @@ function renderSessionList() {
       </button>
     </div>
   `).join("");
+}
 
-  // Add click handlers
-  sidebarHistory.querySelectorAll(".history-item").forEach(item => {
-    item.addEventListener("click", (e) => {
-      if (e.target.closest(".delete-session-btn")) return;
+// 事件委托:一次性在 sidebarHistory 上挂监听,避免每次 renderSessionList 都重绑 N 个 listener。
+// renderSessionList 走 innerHTML 重建,旧 DOM 节点 GC 时 listener 自动失效;委托后单点处理。
+if (sidebarHistory) {
+  sidebarHistory.addEventListener("click", (e) => {
+    const deleteBtn = e.target.closest(".delete-session-btn");
+    if (deleteBtn) {
+      e.stopPropagation();
+      const sid = deleteBtn.dataset.sessionId;
+      if (sid && confirm("确定要删除这个对话吗？")) {
+        socket.emit("delete_session", { session_id: sid });
+      }
+      return;
+    }
+    const item = e.target.closest(".history-item");
+    if (item) {
       const sid = item.dataset.sessionId;
       if (sid && sid !== currentSessionId) {
         socket.emit("switch_session", { session_id: sid });
       }
-    });
-  });
-
-  // Add delete handlers
-  sidebarHistory.querySelectorAll(".delete-session-btn").forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const sid = btn.dataset.sessionId;
-      if (sid) {
-        if (confirm("确定要删除这个对话吗？")) {
-          socket.emit("delete_session", { session_id: sid });
-        }
-      }
-    });
+    }
   });
 }
 
@@ -617,6 +611,14 @@ window.addEventListener("beforeunload", () => {
 
 socket.on("connect", () => {
   console.log("Connected");
+  // Socket.IO 5.x 自动恢复:断线重连时若 server 端 session 还在,会派发 connect 但
+  // recovered=true,此时不能再发 new_session,否则会把用户对话切到一个新空会话。
+  if (socket.recovered) {
+    socket.emit("get_sessions");
+    socket.emit("get_mode");
+    if (userConfig) socket.emit("set_user_config", userConfig);
+    return;
+  }
   const lastSid = sessionStorage.getItem("last_session_id");
   if (lastSid) {
     // 从配置页等返回：恢复之前的会话
@@ -647,9 +649,114 @@ socket.on("user_message", (data) => {
   socket.emit("get_sessions");
 });
 
-// ============ Streaming Output ============
+// ============ Streaming Output (typewriter-style 平滑揭示) ============
 let currentStreamElement = null;
-let streamBuffer = "";
+let streamBuffer = "";           // 已收到的完整文本(用于 stream_end markdown 渲染)
+let _streamTextNode = null;
+let _pendingChars = "";          // 已到达但还没逐字显示给用户的字符
+let _revealRAF = null;           // 平滑揭示循环的 RAF 句柄
+let _revealLastTs = 0;
+let _streamingActive = false;
+let _autoFollow = true;          // 流式时是否自动跟随到底部(用户主动上滚后变 false)
+let _sendMessageTimeout = null;  // send_message 超时保护计时器
+
+// 基础揭示速度(每秒多少字符)。50~60 接近 ChatGPT 视觉感受。
+const REVEAL_BASE_CPS = 55;
+
+// 监听滚动:用户向上滚停止跟随;回到接近底部恢复跟随
+if (chatMessages) {
+  chatMessages.addEventListener("wheel", (e) => {
+    if (e.deltaY < 0) {
+      _autoFollow = false;
+    }
+  }, { passive: true });
+  chatMessages.addEventListener("touchmove", () => {
+    // 触屏上滑无法直接判方向,用滚动位置判
+    const distFromBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+    if (distFromBottom > 80) _autoFollow = false;
+  }, { passive: true });
+  chatMessages.addEventListener("scroll", () => {
+    const distFromBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+    if (distFromBottom < 40) _autoFollow = true;
+  }, { passive: true });
+}
+
+function _revealStep(now) {
+  if (!_streamTextNode) {
+    _revealRAF = null;
+    return;
+  }
+  const last = _revealLastTs || now;
+  const dt = now - last;
+  _revealLastTs = now;
+
+  const queueLen = _pendingChars.length;
+  // 自适应速度:队列越长揭示越快,避免越落越多
+  let cps = REVEAL_BASE_CPS;
+  if (queueLen > 240) {
+    cps = Infinity;                     // 严重落后,直接一次性刷出
+  } else if (queueLen > 120) {
+    cps = REVEAL_BASE_CPS * 4;
+  } else if (queueLen > 60) {
+    cps = REVEAL_BASE_CPS * 2;
+  } else if (queueLen > 30) {
+    cps = REVEAL_BASE_CPS * 1.5;
+  }
+
+  let reveal;
+  if (cps === Infinity) {
+    reveal = queueLen;
+  } else {
+    reveal = Math.max(1, Math.floor((cps * dt) / 1000));
+  }
+  if (reveal > queueLen) reveal = queueLen;
+
+  if (reveal > 0) {
+    const slice = _pendingChars.slice(0, reveal);
+    _pendingChars = _pendingChars.slice(reveal);
+    _streamTextNode.appendData(slice);
+    if (_autoFollow) {
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+  }
+
+  if (_pendingChars.length > 0 || _streamingActive) {
+    _revealRAF = requestAnimationFrame(_revealStep);
+  } else {
+    _revealRAF = null;
+    _revealLastTs = 0;
+  }
+}
+
+function _ensureRevealRunning() {
+  if (_revealRAF === null) {
+    _revealLastTs = 0;
+    _revealRAF = requestAnimationFrame(_revealStep);
+  }
+}
+
+// 流式状态统一复位:错误中断 / 切换会话 / 新建会话 / 删除会话都要调用,
+// 否则 _streamTextNode 残留在被 clearMessages 移除的 DOM 节点上,
+// 下一次 token_chunk 会往一个游离节点写字,造成"流式回复看不见"。
+function resetStreamState() {
+  _streamingActive = false;
+  if (_revealRAF !== null) {
+    cancelAnimationFrame(_revealRAF);
+    _revealRAF = null;
+    _revealLastTs = 0;
+  }
+  if (currentStreamElement) {
+    currentStreamElement.classList.remove("streaming");
+    currentStreamElement = null;
+  }
+  _streamTextNode = null;
+  _pendingChars = "";
+  streamBuffer = "";
+  if (_sendMessageTimeout) {
+    clearTimeout(_sendMessageTimeout);
+    _sendMessageTimeout = null;
+  }
+}
 
 socket.on("stream_start", (data) => {
   clearThinking();
@@ -666,30 +773,46 @@ socket.on("stream_start", (data) => {
   `;
   chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  _autoFollow = true;          // 新一轮回复默认自动跟随到底部
 
   currentStreamElement = div;
   streamBuffer = "";
+  _pendingChars = "";
+  _streamingActive = true;
+  const contentEl = div.querySelector(".message-content");
+  _streamTextNode = document.createTextNode("");
+  contentEl.appendChild(_streamTextNode);
 });
 
 socket.on("token_chunk", (data) => {
-  if (!currentStreamElement) return;
+  if (!currentStreamElement || !_streamTextNode) return;
   streamBuffer += data.token;
-  // 使用简单的文本追加，避免频繁 Markdown 解析
-  const contentEl = currentStreamElement.querySelector(".message-content");
-  if (contentEl) {
-    contentEl.textContent = streamBuffer;
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
+  _pendingChars += data.token;
+  _ensureRevealRunning();
 });
 
 socket.on("stream_end", (data) => {
   clearThinking();
+  _streamingActive = false;
+  if (_sendMessageTimeout) {
+    clearTimeout(_sendMessageTimeout);
+    _sendMessageTimeout = null;
+  }
+  // 把还没揭示完的字立刻补完,再用 markdown 替换
+  if (_pendingChars.length > 0 && _streamTextNode) {
+    _streamTextNode.appendData(_pendingChars);
+    _pendingChars = "";
+  }
+  if (_revealRAF !== null) {
+    cancelAnimationFrame(_revealRAF);
+    _revealRAF = null;
+    _revealLastTs = 0;
+  }
   if (currentStreamElement) {
     const contentEl = currentStreamElement.querySelector(".message-content");
     if (contentEl) {
-      // 优先使用服务器提供的最终消息（可替换早期占位符文本）
       const finalText = data.message || streamBuffer;
-      contentEl.innerHTML = marked.parse(finalText);
+      contentEl.innerHTML = safeRenderMarkdown(finalText);
       contentEl.querySelectorAll("pre code").forEach(block => {
         hljs.highlightElement(block);
       });
@@ -697,6 +820,7 @@ socket.on("stream_end", (data) => {
     currentStreamElement.classList.remove("streaming");
     currentStreamElement = null;
   }
+  _streamTextNode = null;
   streamBuffer = "";
   awaitingReview = data.awaiting_review;
   updateInputHint();
@@ -725,19 +849,6 @@ socket.on("token_usage", (data) => {
   if (tt) tt.textContent = (data.total_tokens || 0).toLocaleString();
   if (cost) cost.textContent = (data.cost_usd || 0).toFixed(6);
   if (dur) dur.textContent = data.duration_ms || 0;
-});
-
-socket.on("base_response", (data) => {
-  clearThinking();
-  // 非流式模式：一次性显示完整消息
-  appendMessage(data.message, "assistant", "助手", true);
-  awaitingReview = data.awaiting_review;
-  updateInputHint();
-  isProcessing = false;
-  sendBtn.style.display = "flex";
-  sendBtn.disabled = !chatInput.value.trim();
-  if (stopBtn) stopBtn.style.display = "none";
-  chatInput.focus();
 });
 
 socket.on("bot_history", (data) => {
@@ -784,6 +895,7 @@ socket.on("message_failed", (data) => {
   sendBtn.disabled = !chatInput.value.trim();
   if (stopBtn) stopBtn.style.display = "none";
   clearThinking();
+  resetStreamState();
 });
 
 socket.on("error", (data) => {
@@ -793,6 +905,7 @@ socket.on("error", (data) => {
   sendBtn.disabled = !chatInput.value.trim();
   if (stopBtn) stopBtn.style.display = "none";
   clearThinking();
+  resetStreamState();
 });
 
 // Session events
@@ -804,6 +917,7 @@ socket.on("sessions_list", (data) => {
 });
 
 socket.on("session_created", (data) => {
+  resetStreamState();
   sessions = data.sessions || [];
   currentSessionId = data.session_id;
   clearMessages();
@@ -815,6 +929,7 @@ socket.on("session_created", (data) => {
 });
 
 socket.on("session_switched", (data) => {
+  resetStreamState();
   sessions = data.sessions || [];
   currentSessionId = data.session_id;
   clearMessages();
@@ -825,6 +940,7 @@ socket.on("session_switched", (data) => {
 });
 
 socket.on("session_deleted", (data) => {
+  resetStreamState();
   sessions = data.sessions || [];
   const current = sessions.find(s => s.is_current);
   if (current) currentSessionId = current.id;
@@ -888,38 +1004,6 @@ socket.on("config_required", (data) => {
   showUserConfigDialog();
 });
 
-function showConfigPrompt(message, configUrl) {
-  // 移除已存在的提示
-  const existing = document.getElementById("configPromptOverlay");
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = "configPromptOverlay";
-  overlay.className = "config-prompt-overlay";
-  overlay.innerHTML = `
-    <div class="config-prompt-box">
-      <div class="config-prompt-icon">⚙️</div>
-      <div class="config-prompt-title">${escapeHtml(message)}</div>
-      <div class="config-prompt-desc">请先配置 AI 模型的 API Key，然后就可以开始对话了。</div>
-      <div class="config-prompt-actions">
-        <button class="config-prompt-btn primary" id="configPromptGo">去配置</button>
-        <button class="config-prompt-btn secondary" id="configPromptCancel">取消</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-
-  document.getElementById("configPromptGo").addEventListener("click", () => {
-    window.location.href = configUrl || "/config";
-  });
-  document.getElementById("configPromptCancel").addEventListener("click", () => {
-    overlay.remove();
-  });
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
-}
-
 socket.on("generation_stopped", (data) => {
   resetToIdle();
   showToast("生成已停止", "info");
@@ -930,6 +1014,8 @@ socket.on("generation_stopping", (data) => {
 });
 
 // ============ Event Handlers ============
+
+const SEND_MESSAGE_TIMEOUT_MS = 120000;
 
 function sendMessage() {
   const message = chatInput.value.trim();
@@ -948,6 +1034,12 @@ function sendMessage() {
   }
 
   socket.emit("send_message", payload);
+
+  _sendMessageTimeout = setTimeout(() => {
+    showToast("请求超时，请重试", "error");
+    resetStreamState();
+    resetToIdle();
+  }, SEND_MESSAGE_TIMEOUT_MS);
 }
 
 sendBtn.addEventListener("click", sendMessage);
@@ -1087,23 +1179,20 @@ const PROVIDER_MODEL_HINTS = {
   azure: "gpt-4o, gpt-4o-mini"
 };
 
-function loadUserConfig() {
-  try {
-    const raw = localStorage.getItem("user_llm_config");
-    if (raw) userConfig = JSON.parse(raw);
-  } catch (e) {
-    userConfig = null;
-  }
-}
-
 function saveUserConfig(cfg) {
   userConfig = cfg;
-  localStorage.setItem("user_llm_config", JSON.stringify(cfg));
+  sessionStorage.setItem("user_llm_config", JSON.stringify(cfg));
+  if (socket) {
+    socket.auth = userConfig ? { api_key: userConfig.apiKey } : {};
+  }
 }
 
 function clearUserConfig() {
   userConfig = null;
-  localStorage.removeItem("user_llm_config");
+  sessionStorage.removeItem("user_llm_config");
+  if (socket) {
+    socket.auth = {};
+  }
 }
 
 function sendUserConfigToServer() {
@@ -1236,9 +1325,11 @@ async function loadExtensionsStatus() {
         pluginsRes.plugins.forEach(p => {
           const btnText = p.enabled ? '禁用' : '启用';
           const btnColor = p.enabled ? '#ff6b6b' : '#51cf66';
+          const safeName = escapeHtml(p.name);
+          const safeDesc = escapeHtml(p.description);
           html += `<div style="display:flex; justify-content:space-between; align-items:center; margin: 6px 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">`;
-          html += `<div style="flex:1; min-width:0;"><div style="font-size: 13px; font-weight:500;">${p.name}</div><div style="font-size: 12px; color: var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${p.description}</div></div>`;
-          html += `<button onclick="togglePlugin('${p.name}', ${!p.enabled})" style="margin-left:8px; padding: 4px 10px; background: ${btnColor}; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; white-space:nowrap;">${btnText}</button>`;
+          html += `<div style="flex:1; min-width:0;"><div style="font-size: 13px; font-weight:500;">${safeName}</div><div style="font-size: 12px; color: var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${safeDesc}</div></div>`;
+          html += `<button onclick="togglePlugin('${safeName.replace(/'/g, "\\'")}', ${!p.enabled})" style="margin-left:8px; padding: 4px 10px; background: ${btnColor}; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; white-space:nowrap;">${btnText}</button>`;
           html += `</div>`;
         });
       }
@@ -1319,7 +1410,7 @@ async function loadExtensionsStatus() {
 
     extensionsContent.innerHTML = html;
   } catch (err) {
-    extensionsContent.innerHTML = `<div style="color: var(--danger);">加载失败: ${err.message}</div>`;
+    extensionsContent.innerHTML = `<div style="color: var(--danger);">加载失败: ${escapeHtml(err.message)}</div>`;
   }
 }
 
@@ -1407,6 +1498,5 @@ if (extensionsOverlay) {
 
 // Fast mode only — no mode toggle, no agent panel
 
-loadUserConfig();
 socket.emit("get_model_info");
 socket.emit("get_mode");

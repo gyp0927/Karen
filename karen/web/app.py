@@ -25,6 +25,7 @@ from werkzeug.utils import secure_filename
 from agents.llm import (
     set_current_llm_config, set_streaming_callback,
     clear_streaming_callback, clear_llm_cache, get_llm,
+    get_llm_provider_model,
 )
 from agents.nodes import create_agents
 from agents.search import web_searcher_agent, memory_searcher_agent
@@ -36,7 +37,7 @@ from state.model_config_manager import (
     list_configs, list_configs_full, get_config, get_active_config,
     add_config, update_config, delete_config, set_active_config, sync_to_env
 )
-from core.config import PROVIDER_NAMES, BASE_URLS
+from core.config import PROVIDER_NAMES, BASE_URLS, GRAPH_TIMEOUT, SOCKET_INACTIVE_TIMEOUT, TOKEN_FLUSH_CHARS
 from core.rag import add_document, search_knowledge, get_knowledge_stats, clear_knowledge, list_documents, delete_document_by_source
 from core.export import export_markdown, export_json, export_html, export_pdf, get_export_filename
 from core.plugin_system import get_registry, list_plugins, execute_plugin
@@ -75,8 +76,8 @@ TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() in ("true", "1", "yes")
 _GENERATED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_files")
 os.makedirs(_GENERATED_DIR, exist_ok=True)
 
-# 配置相关路由仅允许本机访问（防止局域网用户窃取 API Key）
-LOCAL_ONLY_PREFIXES = ["/config", "/api/config", "/api/configs", "/knowledge", "/plugins", "/api/plugins/upload", "/mcp", "/api/mcp"]
+# 配置相关路由仅允许本机访问（防止局域网用户窃取 API Key、滥用用户管理接口）
+LOCAL_ONLY_PREFIXES = ["/config", "/api/config", "/api/configs", "/knowledge", "/plugins", "/api/plugins/upload", "/mcp", "/api/mcp", "/api/auth/users"]
 
 
 @app.route("/api/export", methods=["POST"])
@@ -306,9 +307,6 @@ def restrict_local_only():
 class SocketState:
     """每个 Socket 连接的隔离状态"""
 
-    # 不活跃超时时间（秒）：30 分钟
-    INACTIVE_TIMEOUT = 30 * 60
-
     def __init__(self, sid: str):
         self.sid = sid
         self.user_id: str = ""  # 认证用户 ID
@@ -387,7 +385,7 @@ def _cleanup_inactive_sockets():
         inactive_sids = []
         with _socket_states_lock:
             for sid, state in socket_states.items():
-                if now - state.last_active > SocketState.INACTIVE_TIMEOUT:
+                if now - state.last_active > SOCKET_INACTIVE_TIMEOUT:
                     inactive_sids.append(sid)
         for sid in inactive_sids:
             cleanup_socket(sid)
@@ -431,9 +429,9 @@ def init_agents():
         if _agents_initialized:
             return
 
-        # 只编译快速模式图：并行 WebSearcher + MemorySearcher + ToolCaller → Responder
+        # 只编译快速模式图：单 Responder 节点，搜索在 responder 内部异步处理
         _, _, responder, _ = create_agents(language="zh", fast_mode=True)
-        fast_graph = create_fast_graph(web_searcher_agent, memory_searcher_agent, tool_caller_node, responder)
+        fast_graph = create_fast_graph(responder)
 
         logger.info("Agent graphs initialized")
 
@@ -569,16 +567,23 @@ def socketio_auth_required(handler):
 
 
 @socketio.on("connect")
-def on_connect():
+def on_connect(auth):
+    # Socket.IO 5 握手:客户端 io({ auth: { api_key } }) 把凭证放进 auth 字典,
+    # 不走 query string,避免 api_key 进访问日志/Referer。保留 query 兜底,
+    # 旧客户端升级期间不会被一刀切踢掉。
     sid = request.sid
     logger.info(f"Client connected: sid={sid}")
 
     if AUTH_ENABLED:
-        api_key = request.args.get("api_key", "").strip()
+        api_key = ""
+        if auth and isinstance(auth, dict):
+            api_key = (auth.get("api_key") or "").strip()
+        if not api_key:
+            api_key = request.args.get("api_key", "").strip()
         if not api_key:
             logger.warning(f"Connection rejected: no api_key from sid={sid}")
             return False
-        user = authenticate(api_key)
+        user = authenticate(api_key, ip=request.remote_addr or "")
         if not user:
             logger.warning(f"Connection rejected: invalid api_key from sid={sid}")
             return False
@@ -661,42 +666,32 @@ def handle_message(data):
     except Exception as e:
         logger.exception(f"Error handling message from sid={sid}")
         emit("error", {"message": str(e)})
-    finally:
         set_current_llm_config(None, sid)
         clear_streaming_callback(sid)
-
-
-def _emit_agent_reset(sid: str = ""):
-    """发送 Agent 空闲状态到前端"""
-    try:
-        socketio.emit("agent_finish", {"agent": "web_searcher", "message": "空闲"}, room=sid)
-        socketio.emit("agent_finish", {"agent": "memory_searcher", "message": "空闲"}, room=sid)
-        socketio.emit("agent_finish", {"agent": "responder", "message": "空闲"}, room=sid)
-    except Exception:
-        pass
 
 
 def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None,
                        expected_session_id: str, call_start: float):
     """记录 API 调用统计"""
     try:
-        from core.config import get_provider, get_model_name
         duration_ms = int((time.time() - call_start) * 1000)
-        provider = get_provider()
-        model = get_model_name()
+        provider, model = get_llm_provider_model(sid)
+        # 提取响应内容（防御 final_state 为 None 或消息为空）
+        resp_content = ""
+        if final_state and final_state.get("messages"):
+            last_msg = final_state["messages"][-1]
+            resp_content = getattr(last_msg, "content", "") or ""
         # 估算 token 数：优先使用 tiktoken，回退到字符数估算
         try:
             import tiktoken
             enc = tiktoken.get_encoding("cl100k_base")
             all_content = "\n".join(m.content for m in messages_for_llm if hasattr(m, "content"))
             prompt_tokens = len(enc.encode(all_content))
-            resp_content = final_state["messages"][-1].content if final_state else ""
             completion_tokens = len(enc.encode(resp_content))
         except Exception:
             # 回退：粗略估算（1 token ≈ 3 字符）
             all_content = "\n".join(m.content for m in messages_for_llm if hasattr(m, "content"))
             prompt_tokens = len(all_content) // 3
-            resp_content = final_state["messages"][-1].content if final_state else ""
             completion_tokens = len(resp_content) // 3
         status = "stopped" if is_stopped(sid) else "success"
         record = CallRecord(
@@ -742,7 +737,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     - 快速/计划模式：并行 2 个搜索子 Agent（联网 + 记忆）
     - 协调模式：并行 3 个搜索子 Agent（联网 + 记忆 + 知识库）
     """
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import HumanMessage, AIMessage
     state = get_socket_state(sid)
 
     # 获取历史消息（快速模式保留 5 轮，协调模式 10 轮）
@@ -799,59 +794,80 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 安全 emit：后台线程中请求上下文可能丢失，使用 socketio.emit 代替
     def _safe_emit(event, data):
         try:
+            # 检查 socket 是否仍然活跃（避免断开后仍尝试 emit）
+            with _socket_states_lock:
+                if sid not in socket_states:
+                    return
             socketio.emit(event, data, room=sid)
         except Exception as e:
             logger.debug(f"Failed to emit {event} to {sid}: {e}")
 
-    # 设置流式输出回调：直接发送每个 token，零延迟
+    # token 流中的 emit 包装（复用 _safe_emit 的 sid 检查）
+    def _safe_emit_token(event, data):
+        _safe_emit(event, data)
+
+    # 设置流式输出回调：只在收到第一个 token 时才创建消息气泡
     _stream_started = False
+    # 服务端 token 批处理:凑齐 TOKEN_FLUSH_CHARS 个字符再 emit,减少 socketio 帧数
+    _token_pending: list[str] = []
+    _token_pending_chars = [0]  # 用 list 让闭包内可修改
+
+    def _flush_pending_tokens():
+        if not _token_pending:
+            return
+        combined = "".join(_token_pending)
+        _token_pending.clear()
+        _token_pending_chars[0] = 0
+        if combined:
+            _safe_emit_token("token_chunk", {"token": combined})
 
     def on_token_chunk(token: str):
         nonlocal _stream_started
         if not _stream_started:
             _stream_started = True
-            socketio.emit("stream_start", {"agent": "responder"}, room=sid)
-        if token:
-            socketio.emit("token_chunk", {"token": token}, room=sid)
-
-    def flush_tokens():
-        pass  # 实时发送无需 flush
+            _safe_emit_token("stream_start", {"agent": "responder"})
+        if not token:
+            return
+        _token_pending.append(token)
+        _token_pending_chars[0] += len(token)
+        if _token_pending_chars[0] >= TOKEN_FLUSH_CHARS:
+            _flush_pending_tokens()
 
     set_streaming_callback(on_token_chunk, sid)
 
-    # 创建流式消息气泡，确保 _stream_started 为 True 以便最后发送 stream_end
-    _safe_emit("stream_start", {"agent": "responder"})
-    _stream_started = True
+    # 立刻给前端一个"正在思考"指示，让用户在等待首个 token 期间看到反馈
+    # stream_start 触发时前端会自动清掉这个指示
+    _safe_emit("thinking", {"message": "正在思考..."})
 
     final_state = None
     call_start = time.time()
 
     # === 执行图（核心逻辑，用 try/except 包裹）===
     # 所有模式统一走 LangGraph：Coordinator → Researcher(并行搜索) → Responder
+    # 整体超时见模块级 GRAPH_TIMEOUT
     try:
-        async for event in graph.astream(initial_state):
-            if is_stopped(sid):
-                break
-            for node_name, node_output in event.items():
-                if node_name == "coordinator":
-                    pass
-                elif node_name == "researcher":
-                    pass
-                elif node_name == "web_searcher":
-                    pass
-                elif node_name == "memory_searcher":
-                    pass
-                elif node_name == "responder":
-                    pass
-                final_state = node_output
+        async def _run_graph():
+            final = None
+            async for event in graph.astream(initial_state):
+                if is_stopped(sid):
+                    break
+                for node_output in event.values():
+                    final = node_output
+            return final
+
+        final_state = await asyncio.wait_for(_run_graph(), timeout=GRAPH_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(f"Graph execution timed out after {GRAPH_TIMEOUT}s for sid={sid}")
+        clear_streaming_callback(sid)
+        clear_stop(sid)
+        _safe_emit("stream_end", {"message": "⏱️ 响应超时，请重试或简化问题。", "awaiting_review": False})
+        _safe_emit("error", {"message": "⏱️ 响应超时，请重试或简化问题。"})
+        return
     except Exception as e:
         logger.exception(f"Error processing message for sid={sid}")
         clear_streaming_callback(sid)
-        _emit_agent_reset(sid)
         clear_stop(sid)
-        # 如果流式气泡已创建，发送 stream_end 清理占位符
-        if _stream_started:
-            _safe_emit("stream_end", {"message": f"❌ 处理出错: {str(e)}", "awaiting_review": False})
+        _safe_emit("stream_end", {"message": f"❌ 处理出错: {str(e)}", "awaiting_review": False})
         _safe_emit("message_failed", {"message": user_message, "error": str(e)})
         return
 
@@ -860,9 +876,6 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
 
     # 1. 记录 API 调用统计
     _record_api_stats(sid, messages_for_llm, final_state, expected_session_id, call_start)
-
-    # 3. 重置 Agent 状态
-    _emit_agent_reset(sid)
 
     if is_stopped(sid):
         # 清理流式占位符，避免用户看到未完成的"正在搜索..."
@@ -886,49 +899,55 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         logger.info(f"Session changed during generation, discarding result for sid={sid}")
         return
 
-    base_response = final_state["messages"][-1].content
+    # 提取 AI 回复：从后往前找最后一条 AIMessage（Responder 的输出）
+    base_response = ""
+    for msg in reversed(final_state.get("messages", [])):
+        if isinstance(msg, AIMessage):
+            base_response = msg.content or ""
+            break
+
     state.current_base_response = base_response
+
+    # 仅在有内容或前端已经收到 stream_start 时发结束帧,否则前端会收到孤立 stream_end。
+    if base_response or _stream_started:
+        _flush_pending_tokens()  # 把缓冲区残留 token 先发完，避免最后一段突然出现
+        _safe_emit("stream_end", {"message": base_response, "awaiting_review": True})
+    else:
+        _safe_emit("error", {"message": "No response generated"})
 
     # 避免保存空响应到历史记录
     if base_response:
         state.msg_manager.add_agent_message(base_response, "base_model")
 
-    # === 保存对话记忆到自适应记忆系统 ===
+    # === 保存对话记忆到自适应记忆系统（后台 fire-and-forget，不阻塞 UI） ===
     # source=session_id 是为了让 delete_session 能 cascade 清掉本会话的记忆,
     # 不影响其他会话。user_id 退到 tags 里保留追踪能力。
     if _MEMORY_SYSTEM_AVAILABLE:
-        try:
-            store = get_memory_store()
-            user_tag = f"user_{state.user_id}" if state.user_id else f"sid_{sid}"
-            # 保存用户输入作为 observation
-            await store.save_memory(
-                content=f"用户说: {user_message}",
-                memory_type="observation",
-                source=expected_session_id,
-                importance=0.4,
-                tags=["user_input", user_tag],
-            )
-            # 保存 AI 回复作为 observation
-            await store.save_memory(
-                content=f"AI回复: {base_response[:500]}",  # 限制长度避免过大
-                memory_type="observation",
-                source=expected_session_id,
-                importance=0.3,
-                tags=["ai_response", user_tag],
-            )
-            logger.debug(f"Conversation memories saved for sid={sid} session={expected_session_id}")
-        except Exception as e:
-            logger.warning(f"Failed to save conversation memory: {e}")
+        async def _save_conversation_memories():
+            try:
+                store = get_memory_store()
+                user_tag = f"user_{state.user_id}" if state.user_id else f"sid_{sid}"
+                # 保存用户输入作为 observation
+                await store.save_memory(
+                    content=f"用户说: {user_message}",
+                    memory_type="observation",
+                    source=expected_session_id,
+                    importance=0.4,
+                    tags=["user_input", user_tag],
+                )
+                # 保存 AI 回复作为 observation
+                await store.save_memory(
+                    content=f"AI回复: {base_response[:500]}",
+                    memory_type="observation",
+                    source=expected_session_id,
+                    importance=0.3,
+                    tags=["ai_response", user_tag],
+                )
+                logger.debug(f"Conversation memories saved for sid={sid} session={expected_session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save conversation memory: {e}")
 
-    # 发送流式结束标记（如果使用了流式输出）
-    if _stream_started:
-        _safe_emit("stream_end", {"message": base_response, "awaiting_review": True})
-    else:
-        # 未使用流式输出（如 fast_mode），一次性发送完整消息
-        _safe_emit("base_response", {
-            "message": base_response,
-            "awaiting_review": True
-        })
+        asyncio.create_task(_save_conversation_memories())
 
 
 @socketio.on("trigger_review")
@@ -953,10 +972,9 @@ def handle_review():
     try:
         run_async_in_thread(_async_handle_review(sid, expected_session_id))
     except Exception as e:
+        set_current_llm_config(None, sid)
         logger.exception(f"Error handling review from sid={sid}")
         emit("error", {"message": str(e)})
-    finally:
-        set_current_llm_config(None, sid)
 
 
 async def _async_handle_review(sid: str, expected_session_id: str):
@@ -976,53 +994,52 @@ async def _async_handle_review(sid: str, expected_session_id: str):
 
     def _safe_emit_review(event, data):
         try:
+            with _socket_states_lock:
+                if sid not in socket_states:
+                    return
             socketio.emit(event, data, room=sid)
         except Exception:
             pass
 
-    _safe_emit_review("agent_start", {
-        "agent": "reviewer",
-        "message": "正在审查..." if state.review_language == "zh" else "Reviewing response..."
-    })
+    try:
+        # 构建审查提示
+        from agents.prompts import build_review_prompt
+        review_prompt = build_review_prompt(user_message, state.current_base_response, state.review_language)
 
-    # 构建审查提示
-    from agents.prompts import build_review_prompt
-    review_prompt = build_review_prompt(user_message, state.current_base_response, state.review_language)
+        # 直接调用 reviewer 节点函数（无需 LangGraph）
+        from agents.llm import get_llm
+        from agents.prompts import get_reviewer_prompt
+        from langchain_core.messages import SystemMessage
 
-    # 直接调用 reviewer 节点函数（无需 LangGraph）
-    from agents.llm import get_llm
-    from agents.prompts import get_reviewer_prompt
-    from langchain_core.messages import SystemMessage
+        llm = get_llm(sid)
+        reviewer_system = get_reviewer_prompt(state.review_language)
+        messages = [SystemMessage(content=reviewer_system)]
+        messages.append(HumanMessage(content=review_prompt))
 
-    llm = get_llm(sid)
-    reviewer_system = get_reviewer_prompt(state.review_language)
-    messages = [SystemMessage(content=reviewer_system)]
-    messages.append(HumanMessage(content=review_prompt))
+        review_result = ""
+        async for chunk in llm.astream(messages):
+            if is_stopped(sid):
+                break
+            if chunk.content:
+                review_result += chunk.content
 
-    review_result = ""
-    async for chunk in llm.astream(messages):
         if is_stopped(sid):
-            break
-        if chunk.content:
-            review_result += chunk.content
+            _safe_emit_review("generation_stopped", {"message": "生成已停止"})
+            return
 
-    _safe_emit_review("agent_finish", {"agent": "reviewer", "message": "空闲"})
+        # 会话隔离检查
+        if state.msg_manager.get_current_session_id() != expected_session_id:
+            logger.info(f"Session changed during review, discarding result for sid={sid}")
+            return
 
-    if is_stopped(sid):
-        _safe_emit_review("generation_stopped", {"message": "生成已停止"})
-        return
+        _safe_emit_review("review_complete", {
+            "review_result": review_result or "No review available",
+            "original_response": state.current_base_response
+        })
 
-    # 会话隔离检查
-    if state.msg_manager.get_current_session_id() != expected_session_id:
-        logger.info(f"Session changed during review, discarding result for sid={sid}")
-        return
-
-    _safe_emit_review("review_complete", {
-        "review_result": review_result or "No review available",
-        "original_response": state.current_base_response
-    })
-
-    state.current_base_response = None
+        state.current_base_response = None
+    finally:
+        set_current_llm_config(None, sid)
 
 
 def _create_new_session(sid: str, state):
@@ -1101,6 +1118,7 @@ def handle_delete_session(data):
 
 
 @socketio.on("get_sessions")
+@socketio_auth_required
 def handle_get_sessions():
     """获取所有会话列表"""
     sid = request.sid
@@ -1111,6 +1129,7 @@ def handle_get_sessions():
 
 
 @socketio.on("get_model_info")
+@socketio_auth_required
 def handle_get_model_info():
     sid = request.sid
     cfg = None
@@ -1146,6 +1165,7 @@ def handle_get_model_info():
 
 
 @socketio.on("get_available_models")
+@socketio_auth_required
 def handle_get_available_models():
     """获取可用的模型列表"""
     import requests
@@ -1201,9 +1221,27 @@ def handle_set_model(data):
         emit("error", {"message": "Invalid model name"})
         return
 
+    sid = request.sid
     try:
-        import os
-        os.environ["LLM_MODEL_NAME"] = model_name
+        # 更新当前 socket 的配置，而不是全局环境变量
+        with _socket_configs_lock:
+            cfg = socket_configs.get(sid)
+            if cfg:
+                cfg["model"] = model_name
+                provider = cfg.get("provider", "ollama")
+                cfg["name"] = f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}"
+            else:
+                # 如果 socket 没有配置，使用当前默认 provider 创建新配置
+                from core.config import get_provider
+                provider = get_provider()
+                socket_configs[sid] = {
+                    "provider": provider,
+                    "model": model_name,
+                    "apiKey": "",
+                    "baseUrl": BASE_URLS.get(provider, ""),
+                    "name": f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}"
+                }
+
         clear_llm_cache()
         init_agents()
 
@@ -1248,6 +1286,7 @@ def handle_activate_config(data):
 
 
 @socketio.on("get_configs")
+@socketio_auth_required
 def handle_get_configs():
     """获取所有配置列表"""
     configs = list_configs()
@@ -1259,6 +1298,7 @@ def handle_get_configs():
 
 
 @socketio.on("stop_generation")
+@socketio_auth_required
 def handle_stop_generation():
     """用户请求停止生成"""
     sid = request.sid
@@ -1290,6 +1330,7 @@ def handle_set_mode(data):
 
 
 @socketio.on("get_mode")
+@socketio_auth_required
 def handle_get_mode():
     """获取当前工作模式"""
     sid = request.sid
@@ -1375,9 +1416,23 @@ if __name__ == "__main__":
     init_agents()
     start_socket_cleanup()
     print("Agents initialized!")
-    print("Starting Flask server at http://0.0.0.0:5000")
-    print("Local access: http://127.0.0.1:5000")
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+
+    # 预热 LLM 连接 — 提前建立 TCP/TLS,减少首 token 延迟。
+    # 失败不阻塞启动(如 API Key 未配置时)。
+    try:
+        import asyncio
+        from agents.llm import warmup_connection
+        asyncio.run(warmup_connection())
+    except Exception as e:
+        print(f"Connection warmup skipped: {e}")
+
+    # 默认仅绑定 127.0.0.1。设置 BIND_HOST=0.0.0.0 才会监听局域网
+    bind_host = os.getenv("BIND_HOST", "127.0.0.1")
+    bind_port = int(os.getenv("PORT", "5000"))
+    debug_mode = os.getenv("FLASK_DEBUG", "false").lower() in ("true", "1", "yes")
+    print(f"Starting Flask server at http://{bind_host}:{bind_port}")
+    print(f"Local access: http://127.0.0.1:{bind_port}")
+    socketio.run(app, host=bind_host, port=bind_port, debug=debug_mode)
 
 
 from web.api import api_bp

@@ -9,10 +9,10 @@ logger = logging.getLogger(__name__)
 # 子 Agent 的搜索超时（秒）。比单源搜索的内部超时大,留出 fallback 时间。
 # 协调模式下 Coordinator 先耗 ~1-2s,叠加网页抓取(每页 8s),需留足余量。
 WEB_SEARCH_TIMEOUT_S = 25.0
-WEB_SEARCH_TIMEOUT_FAST_S = 10.0   # 快速模式： aggressively 短
+WEB_SEARCH_TIMEOUT_FAST_S = 5.0    # 快速模式： aggressively 短
 # 记忆系统首次初始化需加载 embedding 模型(~10-20s),3s 必然超时。
 MEMORY_SEARCH_TIMEOUT_S = 15.0
-MEMORY_SEARCH_TIMEOUT_FAST_S = 6.0  # 快速模式：未初始化就快速跳过
+MEMORY_SEARCH_TIMEOUT_FAST_S = 3.0  # 快速模式：未初始化就快速跳过
 
 
 async def _safe_search(
@@ -38,12 +38,18 @@ async def _safe_search(
             logger.debug(f"{label}: 空结果")
     except asyncio.TimeoutError:
         logger.warning(f"{label} 超时")
-    except (TimeoutError, ConnectionError) as e:
+    except TimeoutError:
+        logger.warning(f"{label} 超时")
+    except ConnectionError as e:
         logger.warning(f"{label} 网络错误: {e}")
     except ImportError as e:
         logger.warning(f"{label} 依赖缺失: {e}")
     except Exception as e:
-        logger.warning(f"{label} failed: {e}")
+        # 捕获 httpx.TimeoutException 等第三方库的超时异常
+        if type(e).__name__.endswith("TimeoutException") or type(e).__name__.endswith("TimeoutError"):
+            logger.warning(f"{label} 超时")
+        else:
+            logger.warning(f"{label} failed: {e}")
     return ""
 
 
