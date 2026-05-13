@@ -70,9 +70,11 @@ class Settings(BaseSettings):
     VECTOR_DB_COLLECTION: str = "hot_and_cold_memory"
 
     # Embedding
-    EMBEDDING_PROVIDER: EmbeddingProvider = EmbeddingProvider.OPENAI
+    # 默认使用本地 sentence-transformers（免费、无需 API key），
+    # 如需更高质量可切换为 openai（需配置 OPENAI_API_KEY）
+    EMBEDDING_PROVIDER: EmbeddingProvider = EmbeddingProvider.SENTENCE_TRANSFORMERS
     EMBEDDING_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_DIMENSION: int = 1536
+    EMBEDDING_DIMENSION: int = 384  # 与 all-MiniLM-L6-v2 一致
     # Local embedding model (sentence-transformers)
     # Options: "sentence-transformers/all-MiniLM-L6-v2" (384d)
     #          "sentence-transformers/all-mpnet-base-v2" (768d)

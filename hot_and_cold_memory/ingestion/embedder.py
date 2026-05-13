@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import os
 from collections import OrderedDict
 from typing import Any
 
@@ -96,7 +97,14 @@ class Embedder:
         """Lazy initialize OpenAI client."""
         if self._openai_client is None:
             import openai
-            self._openai_client = openai.AsyncOpenAI(api_key=self.settings.LLM_API_KEY)
+            api_key = os.getenv("OPENAI_API_KEY") or self.settings.LLM_API_KEY
+            if not api_key:
+                raise IngestionError(
+                    "OpenAI embedding requires an API key. "
+                    "Set OPENAI_API_KEY env var, or switch to sentence-transformers "
+                    "(local, free) by setting EMBEDDING_PROVIDER=sentence-transformers."
+                )
+            self._openai_client = openai.AsyncOpenAI(api_key=api_key)
         return self._openai_client
 
     def _get_local_model(self) -> Any:
