@@ -16,6 +16,7 @@ from state.stop_flag import set_stop, is_stopped, cleanup_sid
 
 from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
 from core.config import SOCKET_INACTIVE_TIMEOUT
+from state.model_config_manager import get_active_config
 
 logger = logging.getLogger(__name__)
 
