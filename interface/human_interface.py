@@ -169,7 +169,7 @@ class HumanInterface:
 
         # 保存审查后的认知状态
         if result.get("cognitive_state"):
-            self.cognitive_state = CognitiveState(**result["cognitive_state"])
+            self.cognitive_state = get_cognitive_state_from_dict(result)
 
         msgs = result.get("messages", [])
         for msg in reversed(msgs):

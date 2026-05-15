@@ -27,17 +27,14 @@ from agents.llm import (
     clear_streaming_callback, clear_llm_cache, get_llm,
     get_llm_provider_model,
 )
-from agents.nodes import create_agents
 from agents.search import web_searcher_agent, memory_searcher_agent
 from agents.tools import tool_caller_node
-from graph.orchestrator import create_fast_graph
-from state.manager import SessionManager
-from state.stop_flag import set_stop, clear_stop, is_stopped, cleanup_sid
+from state.stop_flag import clear_stop, is_stopped
 from state.model_config_manager import (
     list_configs, list_configs_full, get_config, get_active_config,
     add_config, update_config, delete_config, set_active_config, sync_to_env
 )
-from core.config import PROVIDER_NAMES, BASE_URLS, GRAPH_TIMEOUT, SOCKET_INACTIVE_TIMEOUT, TOKEN_FLUSH_CHARS
+from core.config import PROVIDER_NAMES, BASE_URLS, GRAPH_TIMEOUT, TOKEN_FLUSH_CHARS
 from core.rag import add_document, search_knowledge, get_knowledge_stats, clear_knowledge, list_documents, delete_document_by_source
 from core.export import export_markdown, export_json, export_html, export_pdf, get_export_filename
 from core.plugin_system import get_registry, list_plugins, execute_plugin
@@ -48,6 +45,15 @@ from core.auth import (
 )
 from state.stats import record_call, estimate_cost, get_stats_summary, get_daily_stats, CallRecord
 from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
+
+from web.state import (
+    SocketState, socket_states, _socket_states_lock,
+    socket_configs, _socket_configs_lock,
+    get_socket_state, cleanup_socket,
+    start_socket_cleanup, init_agents, fast_graph,
+    has_socket_config, has_valid_config,
+)
+from web.utils import _GENERATED_DIR, run_async_in_thread
 
 # 配置日志
 logging.basicConfig(
@@ -71,10 +77,6 @@ socketio = SocketIO(app, cors_allowed_origins=_cors_origins, async_mode="threadi
 # 是否信任反向代理传来的 X-Forwarded-For / X-Real-Ip
 # 默认不信任(否则任何外部用户可伪造 127.0.0.1 绕过 LOCAL_ONLY 校验)
 TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() in ("true", "1", "yes")
-
-# 生成的文件保存目录
-_GENERATED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_files")
-os.makedirs(_GENERATED_DIR, exist_ok=True)
 
 # 配置相关路由仅允许本机访问（防止局域网用户窃取 API Key、滥用用户管理接口）
 LOCAL_ONLY_PREFIXES = ["/config", "/api/config", "/api/configs", "/knowledge", "/plugins", "/api/plugins/upload", "/mcp", "/api/mcp", "/api/auth/users"]
@@ -302,226 +304,6 @@ def restrict_local_only():
 # detect_language, LANG_NAMES, get_lang_instruction 已从 core.utils 和 core.i18n 导入
 
 
-# ===== Socket 状态隔离 =====
-
-class SocketState:
-    """每个 Socket 连接的隔离状态"""
-
-    def __init__(self, sid: str):
-        self.sid = sid
-        self.user_id: str = ""  # 认证用户 ID
-        self.msg_manager = SessionManager(user_id=self.user_id)
-        self.current_base_response: str | None = None
-        self.fast_mode = True
-        self.review_language = "zh"
-        self.detected_language: str | None = None  # 自动检测的用户语言（仅第一条消息）
-        self.last_active = time.time()  # 最后活跃时间戳
-
-    def touch(self):
-        """更新最后活跃时间。"""
-        self.last_active = time.time()
-
-    def set_user_id(self, user_id: str):
-        """设置用户 ID，如果变化则重新创建 SessionManager。"""
-        if self.user_id != user_id:
-            self.user_id = user_id
-            self.msg_manager = SessionManager(user_id=user_id)
-
-    def reset_session(self):
-        """切/新/删会话时重置 per-socket 瞬态字段。
-
-        否则 detected_language 会从前一会话沿用,
-        流式回调也可能继续把 token_chunk 打到新会话。
-        """
-        set_stop(self.sid)
-        clear_streaming_callback(self.sid)
-        self.current_base_response = None
-        self.detected_language = None
-
-
-# 按 socket sid 存储的隔离状态
-socket_states: dict[str, SocketState] = {}
-_socket_states_lock = threading.Lock()
-
-# Socket 级配置隔离：key = socket sid, value = {provider, model, apiKey, baseUrl, name}
-socket_configs = {}
-_socket_configs_lock = threading.Lock()
-
-# 全局预编译的图（图本身不区分 socket，Agent 函数通过 sid 获取配置）
-fast_graph = None           # 快速模式：并行搜索 → Responder
-
-
-def get_socket_state(sid: str) -> SocketState:
-    """获取或创建指定 socket 的状态（线程安全），并更新活跃时间。"""
-    with _socket_states_lock:
-        if sid not in socket_states:
-            socket_states[sid] = SocketState(sid)
-            logger.info(f"Created socket state for sid={sid}")
-        state = socket_states[sid]
-        state.touch()
-        return state
-
-
-def cleanup_socket(sid: str):
-    """清理 socket 相关资源，避免内存泄漏（线程安全）"""
-    with _socket_states_lock:
-        socket_states.pop(sid, None)
-    with _socket_configs_lock:
-        socket_configs.pop(sid, None)
-    cleanup_sid(sid)
-    logger.info(f"Cleaned up socket resources for sid={sid}")
-
-
-_cleanup_timer: threading.Timer | None = None
-
-
-def _cleanup_inactive_sockets():
-    """清理长时间不活跃的 socket 状态，防止内存泄漏。
-    每 10 分钟执行一次检查。
-    """
-    global _cleanup_timer
-    try:
-        now = time.time()
-        inactive_sids = []
-        with _socket_states_lock:
-            for sid, state in socket_states.items():
-                if now - state.last_active > SOCKET_INACTIVE_TIMEOUT:
-                    inactive_sids.append(sid)
-        for sid in inactive_sids:
-            cleanup_socket(sid)
-            logger.info(f"Cleaned up inactive socket: sid={sid}")
-    except Exception as e:
-        logger.warning(f"Socket cleanup failed: {e}")
-    finally:
-        _cleanup_timer = threading.Timer(600, _cleanup_inactive_sockets)
-        _cleanup_timer.daemon = True
-        _cleanup_timer.start()
-
-
-def start_socket_cleanup():
-    """启动 socket 状态定时清理任务。"""
-    global _cleanup_timer
-    if _cleanup_timer is None:
-        _cleanup_timer = threading.Timer(600, _cleanup_inactive_sockets)
-        _cleanup_timer.daemon = True
-        _cleanup_timer.start()
-        logger.info("Socket cleanup timer started")
-
-
-_init_lock = threading.Lock()
-_agents_initialized = False
-
-
-def init_agents():
-    """预编译所有图结构,并初始化记忆系统。
-
-    幂等:首次调用做完整初始化,后续调用直接返回。
-    Graph 是无状态的(运行时通过 sid 取 LLM 配置),memory store 自带
-    `_initialized` 守卫;重复 init 等于浪费 30s embedder 预热。
-    """
-    global fast_graph, _agents_initialized
-
-    # double-checked: 已初始化时跳过 lock,避免每次连接都进 contended path
-    if _agents_initialized:
-        return
-
-    with _init_lock:
-        if _agents_initialized:
-            return
-
-        # 只编译快速模式图：单 Responder 节点，搜索在 responder 内部异步处理
-        _, _, responder, _ = create_agents(language="zh", fast_mode=True)
-        fast_graph = create_fast_graph(responder)
-
-        logger.info("Agent graphs initialized")
-
-        # 初始化记忆系统(后台 fire-and-forget,sentence-transformers 首次加载~10-15s,
-        # 不阻塞 init_agents 返回。第一次 search/save 调用时若未就绪会自动 await initialize)
-        if _MEMORY_SYSTEM_AVAILABLE:
-            def _bg_memory_init():
-                try:
-                    asyncio.run(get_memory_store().initialize())
-                    logger.info("Memory system initialized")
-                except Exception as e:
-                    logger.warning(f"Memory system initialization failed: {e}")
-            threading.Thread(target=_bg_memory_init, name="memory-warmup", daemon=True).start()
-        else:
-            logger.info("Memory system not available (dependencies missing)")
-
-        _agents_initialized = True
-
-
-# 常见的 API Key 占位符/默认值，视为无效配置
-_INVALID_API_KEY_PATTERNS = {
-    "", "your_api_key_here", "your-api-key", "your_api_key",
-    "sk-xxxx", "sk-xxxxxxxx", "placeholder", "none", "null",
-}
-
-
-def _is_valid_api_key(key: str | None) -> bool:
-    """检查 API Key 是否有效（非空、非占位符）"""
-    if not key or not isinstance(key, str):
-        return False
-    stripped = key.strip().lower()
-    return stripped not in _INVALID_API_KEY_PATTERNS and len(stripped) > 4
-
-
-def has_socket_config(sid: str) -> bool:
-    """检查指定 socket 是否有有效配置"""
-    with _socket_configs_lock:
-        cfg = socket_configs.get(sid)
-    if not cfg:
-        return False
-    provider = cfg.get("provider", "ollama")
-    if provider == "ollama":
-        return True
-    return _is_valid_api_key(cfg.get("apiKey"))
-
-
-def has_valid_config(sid: str = None) -> bool:
-    """检查是否有有效配置。优先检查 socket 级配置，再回退到全局配置"""
-    if sid and has_socket_config(sid):
-        return True
-    cfg = get_active_config()
-    if cfg:
-        provider = cfg.get("provider", "ollama")
-        if provider == "ollama":
-            return True
-        return _is_valid_api_key(cfg.get("apiKey"))
-    # 兼容旧版 .env
-    try:
-        from core.config import get_api_key, get_provider
-        key = get_api_key()
-        if _is_valid_api_key(key):
-            return True
-    except (ValueError, KeyError) as e:
-        logger.debug(f"No valid config found: {e}")
-    return False
-
-
-def run_async_in_thread(coro):
-    """在线程中安全运行异步协程。优先使用 asyncio.run()，
-    若检测到已有事件循环在运行，则在新线程中创建独立循环执行。"""
-    try:
-        return asyncio.run(coro)
-    except RuntimeError as e:
-        if "cannot be called from a running event loop" in str(e):
-            import concurrent.futures
-
-            def _run_in_new_loop():
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                try:
-                    return new_loop.run_until_complete(coro)
-                finally:
-                    new_loop.close()
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_run_in_new_loop)
-                return future.result()
-        raise
-
-
 def _send_history(sid: str):
     """发送聊天历史给前端"""
     state = get_socket_state(sid)
@@ -745,7 +527,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     raw_messages = list(state.msg_manager.get_messages_for_model(max_turns=history_turns))
 
     # 过滤掉 content 为空的 assistant 消息（避免 API 400 错误）
-    messages = [m for m in raw_messages if getattr(m, "content", "") or getattr(m, "type", None) != "ai"]
+    messages = [m for m in raw_messages if getattr(m, "content", "").strip() or getattr(m, "type", "") != "ai"]
 
     # 构建当前用户消息（用于传给 LLM，但先不保存到数据库）
     current_msg = HumanMessage(content=user_message, name="Human")

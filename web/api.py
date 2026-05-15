@@ -18,7 +18,7 @@ _GENERATED_DIR = None
 def _get_generated_dir():
     global _GENERATED_DIR
     if _GENERATED_DIR is None:
-        from web.app import _GENERATED_DIR as gd
+        from web.utils import _GENERATED_DIR as gd
         _GENERATED_DIR = gd
     return _GENERATED_DIR
 
@@ -36,6 +36,7 @@ from state.model_config_manager import (
     add_config, update_config, delete_config, set_active_config, sync_to_env,
 )
 from state.stats import record_call, estimate_cost, get_stats_summary, get_daily_stats, CallRecord
+from web.state import has_valid_config
 
 # ===== HTTP Routes =====
 
@@ -242,7 +243,7 @@ def save_config_api():
                 if active and active.get("id") == config_id:
                     sync_to_env(active)
                     clear_llm_cache()
-                    from web.app import init_agents
+                    from web.state import init_agents
                     init_agents()
                 return {"success": True, "message": "配置已更新", "config": result}
             return {"success": False, "message": "配置不存在"}, 404
@@ -255,7 +256,7 @@ def save_config_api():
                 if active:
                     sync_to_env(active)
                     clear_llm_cache()
-                    from web.app import init_agents
+                    from web.state import init_agents
                     init_agents()
             return {"success": True, "message": "配置已保存", "config": result}
     except Exception as e:
@@ -273,7 +274,7 @@ def delete_config_api(config_id):
             if active:
                 sync_to_env(active)
                 clear_llm_cache()
-                from web.app import init_agents
+                from web.state import init_agents
                 init_agents()
             return {"success": True, "message": "配置已删除"}
         return {"success": False, "message": "配置不存在"}, 404
@@ -292,7 +293,7 @@ def activate_config_api(config_id):
             if active:
                 sync_to_env(active)
                 clear_llm_cache()
-                from web.app import init_agents
+                from web.state import init_agents
                 init_agents()
             return {"success": True, "message": "配置已激活"}
         return {"success": False, "message": "配置不存在"}, 404

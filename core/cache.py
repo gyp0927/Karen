@@ -67,17 +67,20 @@ class ResponseCache:
         self._get_count = 0
         init_db()
 
+    # 单条消息最大参与哈希长度,避免超长消息拖慢缓存键计算
+    _MAX_MSG_HASH_LEN = 500
+
     def _get_cache_key(self, messages: list, provider: str, model: str) -> str:
         """生成缓存键（SHA256 哈希）。"""
-        # 序列化消息内容
+        max_len = self._MAX_MSG_HASH_LEN
         content_parts = []
         for msg in messages:
             if hasattr(msg, "content"):
-                content_parts.append(f"{getattr(msg, 'type', 'unknown')}:{msg.content}")
+                content = msg.content[:max_len] if msg.content else ""
+                content_parts.append(f"{getattr(msg, 'type', 'unknown')}:{content}")
             else:
-                content_parts.append(str(msg))
+                content_parts.append(str(msg)[:max_len])
         content_str = "\n".join(content_parts)
-        # 加入 provider 和 model
         raw_key = f"{provider}:{model}:{content_str}"
         return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 

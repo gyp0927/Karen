@@ -6,7 +6,7 @@ import traceback
 from pathlib import Path
 
 # 设置项目根目录
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 results = []
 

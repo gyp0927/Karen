@@ -114,8 +114,12 @@ def _spawn_bg(fn: Callable, *args, **kwargs) -> None:
 
 
 def _estimate_tokens(text: str) -> int:
-    """char/4 粗估,流式 API 拿不到精确 token 计数时用。"""
-    return max(1, len(text) // 4)
+    """粗估 token 数。中文字符 ≈1 token/字,英文 ≈1 token/4 字符。"""
+    if not text:
+        return 0
+    chinese_chars = sum(1 for c in text if "一" <= c <= "鿿")
+    non_chinese = len(text) - chinese_chars
+    return max(1, chinese_chars + non_chinese // 4)
 
 
 def _normalize_message_order(messages: list) -> list:
@@ -198,6 +202,128 @@ def _build_result_dict(
     return result
 
 
+def _check_greeting_cache(query: str, agent_name: str, tools: Optional[list[BaseTool]], sid: str | None, on_token: Optional[Callable[[str], None]]) -> dict | None:
+    """检查问候语快速路径。命中时返回 result_dict，否则返回 None。"""
+    if agent_name != "responder" or tools:
+        return None
+    greeting_reply = _quick_greeting(query)
+    if not greeting_reply:
+        return None
+    logger.info(f"[{agent_name}] Quick greeting shortcut")
+    stream_cb = on_token if on_token else get_streaming_callback(sid)
+    _replay_stream(stream_cb, greeting_reply, sid or "")
+    return _build_result_dict(greeting_reply, agent_name, None)
+
+
+def _build_cache_messages(messages: list, system_prompt: str, agent_name: str) -> list:
+    """构建用于缓存键的消息列表（归一化动态内容）。"""
+    if agent_name != "responder":
+        return messages
+    cache_messages = []
+    swapped_system = False
+    for m in messages:
+        if isinstance(m, AIMessage) and "[route:" in (m.content or ""):
+            continue
+        if isinstance(m, SystemMessage) and getattr(m, "name", None) in ("search_result", "researcher"):
+            continue
+        if isinstance(m, SystemMessage) and not getattr(m, "name", None) and not swapped_system:
+            cache_messages.append(SystemMessage(content=system_prompt))
+            swapped_system = True
+        else:
+            cache_messages.append(m)
+    return cache_messages
+
+
+def _try_read_cache(cache, cache_messages: list, cache_key: tuple, agent_name: str, sid: str | None, on_token: Optional[Callable[[str], None]]) -> dict | None:
+    """尝试从缓存读取。命中时返回 result_dict，否则返回 None。"""
+    if not cache:
+        return None
+    try:
+        cached = cache.get(cache_messages, cache_key[0], cache_key[1])
+        if cached is not None and cached.strip():
+            logger.info(f"[{agent_name}] Cache hit")
+            if agent_name == "coordinator":
+                return {"messages": [AIMessage(content=cached, name=agent_name)]}
+            stream_cb = on_token if on_token else get_streaming_callback(sid)
+            _replay_stream(stream_cb, cached, sid or "")
+            return {"messages": [AIMessage(content=cached, name=agent_name)]}
+    except (OSError, ValueError) as e:
+        logger.warning(f"Cache lookup failed: {e}")
+    return None
+
+
+def _bind_llm_params(llm, agent_name: str, provider: str):
+    """根据 agent 类型绑定 LLM 参数。"""
+    if agent_name == "coordinator":
+        return llm.bind(max_tokens=60, temperature=0.1)
+    if agent_name == "responder":
+        # kimi-code 是 reasoning 模型,reasoning 阶段会消耗 1000+ token,
+        # 若 max_tokens 太小,reasoning 没结束就停了,content 一个字都输出不了。
+        if provider == "kimi-code":
+            return llm.bind(temperature=0.3)
+        return llm.bind(max_tokens=180, temperature=0.3)
+    return llm
+
+
+async def _invoke_llm_stream(llm, messages: list, stream_cb: Optional[Callable[[str], None]], sid: str | None, agent_name: str) -> str:
+    """执行流式 LLM 调用，返回响应文本。处理超时和连接中断。"""
+    response = ""
+
+    async def _stream():
+        nonlocal response
+        async for chunk in llm.astream(messages):
+            if is_stopped(sid):
+                break
+            if chunk.content:
+                response += chunk.content
+                if stream_cb:
+                    stream_cb(chunk.content)
+
+    try:
+        await asyncio.wait_for(_stream(), timeout=_LLM_STREAM_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(f"[{agent_name}] LLM streaming timed out after {_LLM_STREAM_TIMEOUT}s, returning partial response ({len(response)} chars)")
+    except Exception as e:
+        error_name = type(e).__name__
+        error_msg = str(e)
+        if (error_name == "RemoteProtocolError"
+                or "peer closed connection" in error_msg
+                or "incomplete chunked read" in error_msg):
+            if is_stopped(sid):
+                logger.info(f"[{agent_name}] Streaming interrupted but stop requested, returning partial response")
+            else:
+                logger.warning(f"[{agent_name}] Streaming interrupted, retrying once: {e}")
+                if response:
+                    logger.info(f"[{agent_name}] Returning partial response ({len(response)} chars)")
+                else:
+                    try:
+                        await asyncio.wait_for(_stream(), timeout=_LLM_STREAM_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[{agent_name}] LLM retry timed out after {_LLM_STREAM_TIMEOUT}s")
+        else:
+            raise
+    return response
+
+
+def _write_cache_async(cache, cache_messages: list, cache_key: tuple, response: str, sid: str | None) -> None:
+    """后台异步写入缓存（fire-and-forget）。"""
+    if not cache or not response or is_stopped(sid):
+        return
+    def _cache_write():
+        try:
+            cache.set(cache_messages, cache_key[0], cache_key[1], response)
+        except (OSError, ValueError) as e:
+            logger.warning(f"Cache write failed: {e}")
+    _spawn_bg(_cache_write)
+
+
+def _build_empty_fallback(agent_name: str, cognitive_state: CognitiveState | None, enable_cognition: bool) -> dict:
+    """构建空响应的 fallback 结果。"""
+    logger.warning(f"[{agent_name}] LLM returned empty response. Returning fallback message.")
+    fallback = "抱歉,我现在没法回答这个问题。可能是模型暂时无法处理,请稍后再试或换个问法。"
+    return _build_result_dict(fallback, agent_name, cognitive_state if enable_cognition else None)
+
+
 async def _run_agent(
     state: dict,
     system_prompt: str,
@@ -209,7 +335,6 @@ async def _run_agent(
     tools: Optional[list[BaseTool]] = None,
 ) -> dict:
     """通用 Agent 执行函数（接入认知系统 + 工具调用）。"""
-    # 从 state 中获取 sid（如果参数未提供）
     if sid is None:
         sid = state.get("task_context", {}).get("sid", "")
 
@@ -225,15 +350,12 @@ async def _run_agent(
     messages = state.get("messages", [])
     query = messages[-1].content if messages else ""
 
-    # ---- 简单问候快速路径：常见问候直接走模板，不调用 LLM ----
-    if is_responder and not tools:
-        greeting_reply = _quick_greeting(query)
-        if greeting_reply:
-            logger.info(f"[{agent_name}] Quick greeting shortcut")
-            stream_cb = on_token if on_token else get_streaming_callback(sid)
-            _replay_stream(stream_cb, greeting_reply, sid or "")
-            return _build_result_dict(greeting_reply, agent_name, None)
+    # ---- Phase 1: 问候语快速路径 ----
+    greeting_result = _check_greeting_cache(query, agent_name, tools, sid, on_token)
+    if greeting_result:
+        return greeting_result
 
+    # ---- Phase 2: 认知增强 prompt ----
     enhanced_prompt = system_prompt
     had_monologue = False
     if mind and enable_cognition:
@@ -241,146 +363,65 @@ async def _run_agent(
             agent_name, system_prompt, query, cognitive_state, sid=sid or "",
         )
 
-    # 将历史 + 搜索结果合并;_normalize_message_order 把并行 searcher 写入的
-    # 具名 SystemMessage 按 name 排序,保证 LLM 看到的上下文顺序确定。
-    # _reorder_system_first 把所有 SystemMessage 移到非 SystemMessage 之前,
-    # 避免 V3.2-Pro 等模型因 SystemMessage 出现在 HumanMessage 之后而输出异常。
-    messages = [SystemMessage(content=enhanced_prompt)] + _reorder_system_first(_normalize_message_order(list(state["messages"])))
+    # ---- Phase 3: 构建消息列表 ----
+    messages = [SystemMessage(content=enhanced_prompt)] + _reorder_system_first(
+        _normalize_message_order(list(state["messages"]))
+    )
 
-    # 缓存（提前检查，命中则跳过 get_llm() 初始化开销）
+    # ---- Phase 4: 缓存配置 ----
     cache_enabled = agent_name in ("responder", "coordinator")
     cache = get_cache() if cache_enabled else None
     provider, model = get_llm_provider_model(sid or "")
     tools_hash = hash(tuple(sorted(t.name for t in tools))) if tools else "none"
     model_key = f"{model}:{agent_name}:{enable_cognition}:{enable_monologue}:{tools_hash}"
     cache_key = (provider, model_key)
+    cache_messages = _build_cache_messages(messages, system_prompt, agent_name)
 
-    # 缓存 key 归一化：把 enhanced_prompt(含动态 turn_count/emotion/intuition) 换回
-    # 静态 system_prompt，否则 cognitive_state 每次变化都让 cache_key 不同,0 命中。
-    # 同时去掉协调模式的 [route:] AI 标签,让 fast/coordination 共享 cache。
-    cache_messages = messages
-    if agent_name == "responder":
-        cache_messages = []
-        swapped_system = False
-        for m in messages:
-            if isinstance(m, AIMessage) and "[route:" in (m.content or ""):
-                continue
-            # 去掉动态搜索结果，保证 cache key 稳定
-            if isinstance(m, SystemMessage) and getattr(m, "name", None) in ("search_result", "researcher"):
-                continue
-            if isinstance(m, SystemMessage) and not getattr(m, "name", None) and not swapped_system:
-                cache_messages.append(SystemMessage(content=system_prompt))
-                swapped_system = True
-            else:
-                cache_messages.append(m)
+    # ---- Phase 5: 缓存查找 ----
+    cached_result = _try_read_cache(cache, cache_messages, cache_key, agent_name, sid, on_token)
+    if cached_result:
+        return cached_result
 
-    if cache and cache_enabled:
-        try:
-            cached = cache.get(cache_messages, cache_key[0], cache_key[1])
-            if cached is not None and cached.strip():
-                logger.info(f"[{agent_name}] Cache hit")
-                if agent_name == "coordinator":
-                    return {"messages": [AIMessage(content=cached, name=agent_name)]}
-                stream_cb = on_token if on_token else get_streaming_callback(sid)
-                _replay_stream(stream_cb, cached, sid or "")
-                return {"messages": [AIMessage(content=cached, name=agent_name)]}
-        except (OSError, ValueError) as e:
-            logger.warning(f"Cache lookup failed: {e}")
-
-    # 缓存未命中 / 快速路径未触发 → 初始化 LLM 并调用（受并发 semaphore 限制）
+    # ---- Phase 6: LLM 调用 ----
     async with _LLM_CONCURRENCY_SEM:
         llm = get_llm(sid or "")
-        if agent_name == "coordinator":
-            llm = llm.bind(max_tokens=60, temperature=0.1)
-        elif agent_name == "responder":
-            # kimi-code 是 reasoning 模型,reasoning 阶段会消耗 1000+ token,
-            # 若 max_tokens 太小,reasoning 没结束就停了,content 一个字都输出不了。
-            if provider == "kimi-code":
-                llm = llm.bind(temperature=0.3)
-            else:
-                llm = llm.bind(max_tokens=180, temperature=0.3)
-
+        llm = _bind_llm_params(llm, agent_name, provider)
         _llm_t0 = time.time()
 
-        if tools:
-            stream_cb = on_token if on_token else get_streaming_callback(sid)
-            try:
+        try:
+            if tools:
+                stream_cb = on_token if on_token else get_streaming_callback(sid)
                 response = await run_tool_loop(llm, messages, tools, max_iterations=3, sid=sid or "", on_token=stream_cb)
-            except Exception as e:
-                _spawn_bg(
-                    _record_llm_call, agent_name, sid, messages, "",
-                    int((time.time() - _llm_t0) * 1000), "error",
-                )
-                raise
-        else:
-            response = ""
-            stream_cb = on_token if on_token else (get_streaming_callback(sid) if agent_name == "responder" else None)
-            try:
-                async def _stream_llm():
-                    nonlocal response
-                    async for chunk in llm.astream(messages):
-                        if is_stopped(sid):
-                            break
-                        if chunk.content:
-                            response += chunk.content
-                            if stream_cb:
-                                stream_cb(chunk.content)
+            else:
+                stream_cb = on_token if on_token else (get_streaming_callback(sid) if agent_name == "responder" else None)
+                response = await _invoke_llm_stream(llm, messages, stream_cb, sid, agent_name)
+        except Exception:
+            _spawn_bg(
+                _record_llm_call, agent_name, sid, messages, "",
+                int((time.time() - _llm_t0) * 1000), "error",
+            )
+            raise
 
-                await asyncio.wait_for(_stream_llm(), timeout=_LLM_STREAM_TIMEOUT)
-            except asyncio.TimeoutError:
-                logger.warning(f"[{agent_name}] LLM streaming timed out after {_LLM_STREAM_TIMEOUT}s, returning partial response ({len(response)} chars)")
-            except Exception as e:
-                error_name = type(e).__name__
-                error_msg = str(e)
-                if (error_name == "RemoteProtocolError"
-                        or "peer closed connection" in error_msg
-                        or "incomplete chunked read" in error_msg):
-                    if is_stopped(sid):
-                        logger.info(f"[{agent_name}] Streaming interrupted but stop requested, returning partial response")
-                    else:
-                        logger.warning(f"[{agent_name}] Streaming interrupted, retrying once: {e}")
-                        if response:
-                            logger.info(f"[{agent_name}] Returning partial response ({len(response)} chars)")
-                        else:
-                            try:
-                                await asyncio.wait_for(_stream_llm(), timeout=_LLM_STREAM_TIMEOUT)
-                            except asyncio.TimeoutError:
-                                logger.warning(f"[{agent_name}] LLM retry timed out after {_LLM_STREAM_TIMEOUT}s")
-                else:
-                    _spawn_bg(
-                        _record_llm_call, agent_name, sid, messages, response,
-                        int((time.time() - _llm_t0) * 1000), "error",
-                    )
-                    raise
-
+    # ---- Phase 7: 统计记录 ----
     _llm_duration_ms = int((time.time() - _llm_t0) * 1000)
     _llm_status = "stopped" if is_stopped(sid) else "success"
     _spawn_bg(
         _record_llm_call, agent_name, sid, messages, response, _llm_duration_ms, _llm_status,
     )
 
-    if cache and cache_enabled and response and not is_stopped(sid):
-        def _cache_write():
-            try:
-                cache.set(cache_messages, cache_key[0], cache_key[1], response)
-            except (OSError, ValueError) as e:
-                logger.warning(f"Cache write failed: {e}")
-        _spawn_bg(_cache_write)
+    # ---- Phase 8: 缓存写入 ----
+    _write_cache_async(cache, cache_messages, cache_key, response, sid)
 
+    # ---- Phase 9: 认知处理 ----
     if mind and enable_cognition:
         response = mind.process_response(
             agent_name, query, response, cognitive_state, had_monologue, sid=sid or "",
         )
         save_cognitive_state_to_dict(state, cognitive_state)
 
-    # 空响应：返回明确的 fallback 而不是空 messages 列表。
-    # 之前返回 {"messages": []} 会让上游 add reducer 保留原 HumanMessage,
-    # HumanInterface 取 messages[-1].content 时拿到的是用户输入本身,表现为"回声"。
-    # 典型触发场景:kimi-for-coding 这类专用模型对非编码问题返回 HTTP 200 + 空 chunks。
+    # ---- Phase 10: 空响应 fallback ----
     if not response or not response.strip():
-        logger.warning(f"[{agent_name}] LLM returned empty response (provider={provider}, model={model}). Returning fallback message.")
-        fallback = "抱歉,我现在没法回答这个问题。可能是模型暂时无法处理,请稍后再试或换个问法。"
-        return _build_result_dict(fallback, agent_name, cognitive_state if enable_cognition else None)
+        return _build_empty_fallback(agent_name, cognitive_state, enable_cognition)
 
     return _build_result_dict(response, agent_name, cognitive_state if enable_cognition else None)
 
