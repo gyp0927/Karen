@@ -1,0 +1,20 @@
+{
+  "skill_name": "claude-dashboard",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我想在 Claude Code 底部加一个 dashboard，显示时间、项目目录、git 分支、模型名、上下文占比，还要一个可爱的宠物动画，实时刷新",
+      "expected_output": "提供完整的安装步骤，包括复制脚本、配置 settings.json、设置 refreshInterval"
+    },
+    {
+      "id": 2,
+      "prompt": "我的 statusline 太简单了，想要丰富一些，加个宠物进去",
+      "expected_output": "推荐 claude-dashboard skill，指导用户安装并配置"
+    },
+    {
+      "id": 3,
+      "prompt": "dashboard 安装好了，但信息太多屏幕放不下，能不能紧凑一点",
+      "expected_output": "指导用户开启 compact_mode，或关闭不需要的显示项"
+    }
+  ]
+}
