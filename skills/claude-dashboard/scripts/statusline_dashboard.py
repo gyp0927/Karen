@@ -23,6 +23,11 @@ CONFIG = {
     "show_rate_limit": False,
     "show_user_host": True,
     "show_session": False,
+    "show_cpu": True,
+    "show_memory": True,
+    "show_weather": True,
+    "weather_city": "",  # 留空 = 自动按 IP 定位；或填城市名如 "Beijing"
+    "weather_cache_minutes": 10,  # 天气缓存分钟数
     "time_format": "%H:%M:%S",
     "pet_style": "emoji",  # "emoji" or "ascii"
     "separator": " | ",
@@ -61,6 +66,64 @@ def get_pet_frame():
         frames = PET_FRAMES_EMOJI
         frame_idx = second % len(frames)
         return frames[frame_idx]
+
+
+def get_cpu_memory():
+    """获取 CPU 和内存使用率，psutil 不可用时返回 (None, None)。"""
+    try:
+        import psutil
+        cpu = psutil.cpu_percent(interval=0.1)
+        mem = psutil.virtual_memory().percent
+        return cpu, mem
+    except Exception:
+        return None, None
+
+
+def get_weather():
+    """获取天气，带文件缓存。缓存过期或失败时尝试刷新。"""
+    import tempfile
+    import time
+    import urllib.request
+    import urllib.parse
+
+    cache_dir = tempfile.gettempdir()
+    cache_file = os.path.join(cache_dir, "claude_dashboard_weather.txt")
+    cache_age_max = CONFIG["weather_cache_minutes"] * 60
+
+    if os.path.exists(cache_file):
+        age = time.time() - os.path.getmtime(cache_file)
+        if age < cache_age_max:
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+
+    city = CONFIG.get("weather_city", "")
+    path = urllib.parse.quote(city) if city else ""
+    url = f"https://wttr.in/{path}?format=%c+%t&lang=zh"
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/7.0"})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = resp.read().decode("utf-8").strip()
+        if data and not data.lower().startswith("unknown"):
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    f.write(data)
+            except Exception:
+                pass
+            return data
+    except Exception:
+        pass
+
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            pass
+    return ""
 
 
 def get_git_branch(cwd):
@@ -256,6 +319,28 @@ def build_statusline(data):
         session = data.get("session_name", "")
         if session:
             parts.append(f"📌 {session}")
+
+    # CPU / 内存
+    if CONFIG["show_cpu"] or CONFIG["show_memory"]:
+        cpu, mem = get_cpu_memory()
+        if CONFIG["show_cpu"] and cpu is not None:
+            cpu_icon = "🔴" if cpu >= 80 else "🟡" if cpu >= 50 else "🟢"
+            if CONFIG["compact_mode"]:
+                parts.append(f"cpu:{int(cpu)}%")
+            else:
+                parts.append(f"{cpu_icon}cpu:{int(cpu)}%")
+        if CONFIG["show_memory"] and mem is not None:
+            mem_icon = "🔴" if mem >= 80 else "🟡" if mem >= 50 else "🟢"
+            if CONFIG["compact_mode"]:
+                parts.append(f"mem:{int(mem)}%")
+            else:
+                parts.append(f"{mem_icon}mem:{int(mem)}%")
+
+    # 天气
+    if CONFIG["show_weather"]:
+        weather = get_weather()
+        if weather:
+            parts.append(weather)
 
     # 组合输出
     return CONFIG["separator"].join(parts)

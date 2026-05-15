@@ -23,6 +23,8 @@ metadata:
 - **Token 消耗** — 从 rate_limits 估算 token 使用
 - **可爱宠物** — ASCII/Emoji 宠物动画，定时切换帧
 - **系统信息** — 用户名、主机名
+- **CPU / 内存** — 实时 CPU 与内存占用率（需 `psutil`）
+- **天气** — 当前位置（或指定城市）的天气与温度，10 分钟缓存（来源 wttr.in）
 - **会话名称** — 自定义会话名（如有）
 
 ## 快速开始
@@ -87,6 +89,11 @@ CONFIG = {
     "show_rate_limit": True,    # 是否显示 rate limit
     "show_user_host": True,     # 是否显示用户名@主机名
     "show_session": False,      # 是否显示会话名
+    "show_cpu": True,           # 是否显示 CPU 使用率（需 psutil）
+    "show_memory": True,        # 是否显示内存使用率（需 psutil）
+    "show_weather": True,       # 是否显示天气（来源 wttr.in）
+    "weather_city": "",         # 天气城市，留空=自动IP定位，如 "Beijing"
+    "weather_cache_minutes": 10,# 天气缓存分钟数
     "time_format": "%H:%M:%S",  # 时间格式
     "pet_style": "emoji",       # 宠物样式: "emoji" | "ascii"
     "separator": " | ",         # 分隔符
@@ -148,6 +155,8 @@ Claude Code 的 statusline 机制：
 | 显示乱码 | 确保终端支持 Unicode emoji |
 | 信息不完整 | 某些字段（如 git 分支）仅在对应目录下才显示 |
 | Windows 路径问题 | 使用双反斜杠 `\\` 或正斜杠 `/` |
+| 天气不显示 | 检查网络连接，`weather_cache_minutes` 可改短；也可填 `weather_city` 指定城市 |
+| CPU/内存不显示 | 确保已安装 `psutil`：`pip install psutil` |
 
 ## 扩展建议
 
