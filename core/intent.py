@@ -147,8 +147,10 @@ _CLARIFY_PATTERNS = [
 
 
 def _match_patterns(text: str, patterns: list[str]) -> bool:
-    """正则匹配"""
+    """正则匹配。输入过长时直接返回 False，防止 ReDoS。"""
     t = text.strip().lower()
+    if len(t) > 1000:
+        return False
     for p in patterns:
         if re.search(p, t):
             return True

@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 
-from agents.llm import clear_streaming_callback
+from agents.llm import clear_streaming_callback, cleanup_llm_config
 from agents.nodes import create_agents
 from graph.orchestrator import create_fast_graph
 from state.manager import SessionManager
@@ -86,6 +86,7 @@ def cleanup_socket(sid: str):
     with _socket_configs_lock:
         socket_configs.pop(sid, None)
     cleanup_sid(sid)
+    cleanup_llm_config(sid)
     logger.info(f"Cleaned up socket resources for sid={sid}")
 
 

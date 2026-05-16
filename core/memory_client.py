@@ -109,6 +109,7 @@ class _SQLiteMemoryFallback:
                 words = [w for w in query.split() if len(w) >= 2]
                 if not words:
                     words = [query]
+                words = words[:20]
                 sql = "SELECT * FROM memories WHERE 1=1"
                 params: list[Any] = []
                 if source:

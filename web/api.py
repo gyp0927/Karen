@@ -3,6 +3,7 @@ import ast
 import io
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def upload_file():
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
-            os.rmdir(temp_dir)
+            shutil.rmtree(temp_dir, ignore_errors=True)
         except OSError:
             pass
 

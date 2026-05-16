@@ -11,7 +11,7 @@ import sys
 import traceback
 import types
 
-# Restricted builtins — same removals as code_executor.py
+# Restricted builtins — 移除危险函数及所有下划线开头属性（防遍历绕过）
 _SAFE_BUILTINS = dict(builtins.__dict__)
 for _fname in (
     "open",
@@ -37,6 +37,11 @@ for _fname in (
     "methodcaller",
 ):
     _SAFE_BUILTINS.pop(_fname, None)
+
+# 移除所有下划线开头的属性，防止通过 __builtins__ 遍历拿到危险对象
+for _fname in list(_SAFE_BUILTINS.keys()):
+    if _fname.startswith("_"):
+        _SAFE_BUILTINS.pop(_fname, None)
 
 _FROZEN_BUILTINS = types.MappingProxyType(_SAFE_BUILTINS)
 _SAFE_GLOBALS = {

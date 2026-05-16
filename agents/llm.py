@@ -101,6 +101,13 @@ def clear_streaming_callback(sid: str = ""):
         _token_callbacks.pop(sid, None)
 
 
+def cleanup_llm_config(sid: str = ""):
+    """清理指定 sid 的 LLM 配置和回调，防止 socket 断开后内存泄漏。"""
+    _llm_configs.pop(sid, None)
+    with _callbacks_lock:
+        _token_callbacks.pop(sid, None)
+
+
 # ========== LLM 实例管理 ==========
 # 实例内部持有按 loop 绑定的 httpx client,所以缓存键也要含 loop id,
 # 否则换 loop 时旧实例的 client 已失效。

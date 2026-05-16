@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -202,7 +203,7 @@ def upload_to_rag():
             try:
                 if os.path.exists(file_path):
                     os.remove(file_path)
-                os.rmdir(temp_dir)
+                shutil.rmtree(temp_dir, ignore_errors=True)
             except OSError:
                 pass
     except Exception as e:
@@ -385,7 +386,7 @@ def on_connect(auth):
         if not api_key:
             logger.warning(f"Connection rejected: no api_key from sid={sid}")
             return False
-        user = authenticate(api_key, ip=request.remote_addr or "")
+        user = authenticate(api_key, ip=_get_real_remote_addr() or "")
         if not user:
             logger.warning(f"Connection rejected: invalid api_key from sid={sid}")
             return False
