@@ -53,6 +53,11 @@ _AUTH_PURGE_EVERY = 100
 _AUTH_MAX_ENTRIES = 10000
 _auth_purge_counter = 0
 
+# 默认管理员配置（首次启动且用户表为空时自动创建）
+_DEFAULT_ADMIN_NAME = os.getenv("DEFAULT_ADMIN_NAME", "admin")
+_DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
+_DEFAULT_ADMIN_API_KEY = os.getenv("DEFAULT_ADMIN_API_KEY", "karen-admin-default-key")
+
 
 def _purge_expired_failures(now: float) -> None:
     """清理 _auth_failures 中所有已过 BLOCK 窗口的条目。调用方需持有 _auth_rate_lock。"""
@@ -451,3 +456,35 @@ def get_current_user() -> Optional[User]:
 
 # 初始化数据库
 init_auth_db()
+
+
+def ensure_default_admin():
+    """如果用户表为空，自动创建默认管理员账号。"""
+    if not AUTH_ENABLED:
+        return
+    with _lock:
+        conn = _get_conn()
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            if count == 0:
+                try:
+                    create_user(
+                        name=_DEFAULT_ADMIN_NAME,
+                        api_key=_DEFAULT_ADMIN_API_KEY,
+                        role="admin",
+                        password=_DEFAULT_ADMIN_PASSWORD,
+                    )
+                    logger.warning("=" * 50)
+                    logger.warning(f"创建了默认管理员账号: {_DEFAULT_ADMIN_NAME}")
+                    logger.warning(f"默认密码: {_DEFAULT_ADMIN_PASSWORD}")
+                    logger.warning("请尽快登录 /login 修改密码")
+                    logger.warning("或通过环境变量 DEFAULT_ADMIN_PASSWORD 设置安全密码")
+                    logger.warning("=" * 50)
+                except Exception as e:
+                    logger.error(f"创建默认管理员失败: {e}")
+        finally:
+            conn.close()
+
+
+# 首次启动时确保有管理员
+ensure_default_admin()
