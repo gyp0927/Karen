@@ -79,10 +79,13 @@ class _SQLiteMemoryFallback:
     """
 
     def __init__(self) -> None:
+        import threading
         os.makedirs(os.path.dirname(self._DB_PATH), exist_ok=True)
-        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
-        conn.executescript(self._INIT_SQL)
-        conn.close()
+        self._lock = threading.RLock()
+        with self._lock:
+            conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+            conn.executescript(self._INIT_SQL)
+            conn.close()
         self._initialized = True
 
     def is_initialized(self) -> bool:
@@ -98,37 +101,38 @@ class _SQLiteMemoryFallback:
         user_id: str = "",
         source: str = "",
     ) -> list[dict[str, Any]]:
-        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
-        conn.row_factory = _sqlite3.Row
-        try:
-            # 简单文本匹配：关键词拆成 LIKE 子句
-            words = [w for w in query.split() if len(w) >= 2]
-            if not words:
-                words = [query]
-            sql = "SELECT * FROM memories WHERE 1=1"
-            params: list[Any] = []
-            if source:
-                sql += " AND source = ?"
-                params.append(source)
-            for w in words:
-                sql += " AND content LIKE ?"
-                params.append(f"%{w}%")
-            sql += " ORDER BY importance DESC, created_at DESC LIMIT ?"
-            params.append(top_k)
-            rows = conn.execute(sql, params).fetchall()
-            return [
-                {
-                    "memory_id": row["memory_id"],
-                    "content": row["content"],
-                    "score": 0.5,
-                    "tier": "cold",
-                    "memory_type": row["memory_type"],
-                    "frequency_score": 0.0,
-                }
-                for row in rows
-            ]
-        finally:
-            conn.close()
+        with self._lock:
+            conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+            conn.row_factory = _sqlite3.Row
+            try:
+                # 简单文本匹配：关键词拆成 LIKE 子句
+                words = [w for w in query.split() if len(w) >= 2]
+                if not words:
+                    words = [query]
+                sql = "SELECT * FROM memories WHERE 1=1"
+                params: list[Any] = []
+                if source:
+                    sql += " AND source = ?"
+                    params.append(source)
+                for w in words:
+                    sql += " AND content LIKE ?"
+                    params.append(f"%{w}%")
+                sql += " ORDER BY importance DESC, created_at DESC LIMIT ?"
+                params.append(top_k)
+                rows = conn.execute(sql, params).fetchall()
+                return [
+                    {
+                        "memory_id": row["memory_id"],
+                        "content": row["content"],
+                        "score": 0.5,
+                        "tier": "cold",
+                        "memory_type": row["memory_type"],
+                        "frequency_score": 0.0,
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
 
     async def save_memory(
         self,
@@ -138,17 +142,18 @@ class _SQLiteMemoryFallback:
         importance: float = 0.5,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
-        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
-        try:
-            mid = str(_uuid.uuid4())
-            conn.execute(
-                "INSERT INTO memories (memory_id, content, memory_type, source, importance, tags, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (mid, content, memory_type, source, importance, json.dumps(tags or []), _time.time()),
-            )
-            conn.commit()
-            return {"memory_id": mid, "status": "created", "tier": "cold"}
-        finally:
-            conn.close()
+        with self._lock:
+            conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+            try:
+                mid = str(_uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO memories (memory_id, content, memory_type, source, importance, tags, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (mid, content, memory_type, source, importance, json.dumps(tags or []), _time.time()),
+                )
+                conn.commit()
+                return {"memory_id": mid, "status": "created", "tier": "cold"}
+            finally:
+                conn.close()
 
     async def save_memories_batch(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [await self.save_memory(**item) for item in items]
@@ -156,13 +161,14 @@ class _SQLiteMemoryFallback:
     async def delete_session_memories(self, session_id: str) -> int:
         if not session_id:
             return 0
-        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
-        try:
-            cursor = conn.execute("DELETE FROM memories WHERE source = ?", (session_id,))
-            conn.commit()
-            return cursor.rowcount
-        finally:
-            conn.close()
+        with self._lock:
+            conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+            try:
+                cursor = conn.execute("DELETE FROM memories WHERE source = ?", (session_id,))
+                conn.commit()
+                return cursor.rowcount
+            finally:
+                conn.close()
 
     @staticmethod
     def format_memories_for_prompt(memories: list[dict[str, Any]]) -> str:
@@ -175,12 +181,13 @@ class _SQLiteMemoryFallback:
         return "\n".join(lines)
 
     def get_stats(self) -> dict[str, Any]:
-        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
-        try:
-            total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-            return {"initialized": True, "backend": "sqlite_fallback", "total_memories": total}
-        finally:
-            conn.close()
+        with self._lock:
+            conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+            try:
+                total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+                return {"initialized": True, "backend": "sqlite_fallback", "total_memories": total}
+            finally:
+                conn.close()
 
     async def shutdown(self) -> None:
         pass

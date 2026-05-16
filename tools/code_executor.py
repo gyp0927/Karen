@@ -1,15 +1,13 @@
 """Python 代码执行沙箱 - 安全运行 Agent 生成的代码。"""
 
 import ast
-import io
+import json
 import logging
-import multiprocessing
 import os
+import subprocess
 import sys
-import tempfile
 import time
 import traceback
-from contextlib import redirect_stdout, redirect_stderr
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -126,62 +124,6 @@ def _check_ast(code: str) -> bool:
     return True
 
 
-def _execute_code_worker(code: str, timeout: int, result_queue: multiprocessing.Queue):
-    """在子进程中执行代码（worker 函数）。"""
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
-    start_time = time.time()
-
-    # 子进程层面尽量限制资源(Linux/macOS 才有 resource 模块)
-    try:
-        import resource
-        # 内存上限 512MB,CPU 60s
-        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
-    except (ImportError, ValueError, OSError):
-        pass  # Windows 无 resource 模块,只靠超时兜底
-
-    try:
-        # 重定向 stdout/stderr
-        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
-            # 创建一个受限的全局命名空间。
-            # 要 pop 的远不止 open/eval — 还有可被构造逃逸链的 type/object/__build_class__/getattr 等。
-            import builtins
-            import types as _types
-            safe_builtins = dict(builtins.__dict__)
-            for _fname in (
-                "open", "input", "exec", "eval", "compile", "__import__",
-                "__build_class__", "globals", "locals", "vars",
-                "type", "object", "memoryview", "getattr", "setattr", "delattr",
-                "breakpoint", "help", "exit", "quit",
-                "attrgetter", "itemgetter", "methodcaller",  # operator 模块函数
-            ):
-                safe_builtins.pop(_fname, None)
-            # 使用 MappingProxyType 冻结 builtins，防止运行时修改
-            frozen_builtins = _types.MappingProxyType(safe_builtins)
-            safe_globals = {
-                "__builtins__": frozen_builtins,
-                "__name__": "__main__",
-            }
-            exec(code, safe_globals)
-
-        duration_ms = int((time.time() - start_time) * 1000)
-        result_queue.put({
-            "success": True,
-            "stdout": stdout_buffer.getvalue(),
-            "stderr": stderr_buffer.getvalue(),
-            "duration_ms": duration_ms,
-        })
-    except Exception as e:
-        result_queue.put({
-            "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "stdout": stdout_buffer.getvalue(),
-            "stderr": stderr_buffer.getvalue(),
-        })
-
-
 def execute_python(code: str, timeout: int = 30) -> dict:
     """安全执行 Python 代码。
 
@@ -213,45 +155,53 @@ def execute_python(code: str, timeout: int = 30) -> dict:
         }
 
     # 步骤2: 在子进程中执行（超时保护）
-    # 注意：Windows 上 multiprocessing 需要主模块被 __main__ 保护
-    # 这里使用 spawn 启动方式确保子进程独立
-    ctx = multiprocessing.get_context("spawn")
-    result_queue = ctx.Queue()
-    process = ctx.Process(
-        target=_execute_code_worker,
-        args=(code, timeout, result_queue)
-    )
-
+    runner_path = os.path.join(os.path.dirname(__file__), "_code_runner.py")
+    start_time = time.time()
     try:
-        process.start()
-        process.join(timeout=timeout)
+        proc = subprocess.run(
+            [sys.executable, runner_path],
+            input=code,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        duration_ms = int((time.time() - start_time) * 1000)
 
-        if process.is_alive():
-            process.terminate()
-            process.join(timeout=2)
-            if process.is_alive():
-                process.kill()
-            return {
-                "success": False,
-                "stdout": "",
-                "stderr": "",
-                "error": f"代码执行超时（>{timeout}秒）",
-                "traceback": "",
-                "duration_ms": timeout * 1000,
-            }
-
-        if not result_queue.empty():
-            return result_queue.get()
+        stdout_text = proc.stdout
+        lines = stdout_text.splitlines()
+        result: dict
+        if lines:
+            try:
+                result = json.loads(lines[-1])
+            except json.JSONDecodeError:
+                result = {
+                    "success": proc.returncode == 0,
+                    "stdout": stdout_text,
+                    "stderr": proc.stderr,
+                    "error": None if proc.returncode == 0 else f"退出码: {proc.returncode}",
+                    "traceback": None,
+                }
         else:
-            return {
-                "success": False,
+            result = {
+                "success": proc.returncode == 0,
                 "stdout": "",
-                "stderr": "",
-                "error": "执行进程异常退出",
-                "traceback": "",
-                "duration_ms": 0,
+                "stderr": proc.stderr,
+                "error": None if proc.returncode == 0 else f"退出码: {proc.returncode}",
+                "traceback": None,
             }
+        result["duration_ms"] = duration_ms
+        return result
 
+    except subprocess.TimeoutExpired:
+        duration_ms = int((time.time() - start_time) * 1000)
+        return {
+            "success": False,
+            "stdout": "",
+            "stderr": "",
+            "error": f"代码执行超时（>{timeout}秒）",
+            "traceback": "",
+            "duration_ms": duration_ms,
+        }
     except Exception as e:
         logger.exception("Code execution failed")
         return {
@@ -262,10 +212,6 @@ def execute_python(code: str, timeout: int = 30) -> dict:
             "traceback": traceback.format_exc(),
             "duration_ms": 0,
         }
-    finally:
-        if process.is_alive():
-            process.terminate()
-            process.join(timeout=1)
 
 
 def format_result(result: dict) -> str:

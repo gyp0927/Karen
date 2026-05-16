@@ -47,8 +47,9 @@ def _get_llm_sem() -> asyncio.Semaphore:
         # 防止 dict 无限增长：loop 被 GC 后 id 可能重用，数量通常很少，
         # 极端场景下（线程池频繁回收）做上限兜底
         if len(_llm_semaphores) > 64:
-            _llm_semaphores.clear()
-            _llm_semaphores[loop_id] = sem
+            # 保留最近的条目，移除最旧的（Python 3.7+ dict 保持插入顺序）
+            for old_id in list(_llm_semaphores.keys())[:-32]:
+                del _llm_semaphores[old_id]
     return sem
 
 

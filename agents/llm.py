@@ -202,10 +202,18 @@ async def warmup_connection(sid: str = "") -> bool:
     """预热 LLM 连接 — 提前建立 TCP/TLS 连接,减少首 token 延迟。
 
     在服务器启动时调用一次,让 HTTP 连接池和目标 API 之间保持长连接。
-    预热失败不抛异常,避免阻塞启动流程。
+    预热失败不抛异常,避免阻塞启动流程;失败时清除缓存中的坏实例。
     """
+    cache_key = None
     try:
         llm = get_llm(sid)
+        # 记录 cache_key 以便失败时清理
+        kwargs = _build_llm_kwargs(sid)
+        try:
+            loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            loop_id = 0
+        cache_key = (loop_id, _make_cache_key(kwargs))
         # 发送一个极短请求触发连接建立,但不等待完整响应
         from langchain_core.messages import HumanMessage
         async for _ in llm.astream([HumanMessage(content="hi")]):
@@ -214,4 +222,7 @@ async def warmup_connection(sid: str = "") -> bool:
         return True
     except Exception as e:
         logger.warning(f"Connection warmup failed (non-critical): {e}")
+        if cache_key:
+            with _llm_cache_lock:
+                _llm_cache.pop(cache_key, None)
         return False

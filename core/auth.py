@@ -189,18 +189,22 @@ def authenticate(api_key: str, ip: str = "") -> Optional[User]:
             )
             row = cursor.fetchone()
             if row:
-                # 认证成功：清除该 IP 的失败记录，避免合法用户被累积失败拖入限流
-                with _auth_rate_lock:
-                    _auth_failures.pop(ip, None)
-                return User(
+                user = User(
                     row["id"],
                     row["name"],
                     json.loads(row["config_json"] or "{}")
                 )
-            _record_auth_failure(ip)
-            return None
+            else:
+                user = None
         finally:
             conn.close()
+
+    if user:
+        with _auth_rate_lock:
+            _auth_failures.pop(ip, None)
+        return user
+    _record_auth_failure(ip)
+    return None
 
 
 def get_user_by_id(user_id: str) -> Optional[User]:

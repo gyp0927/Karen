@@ -222,9 +222,11 @@ class IntuitionEngine:
     _CACHE_MAX_SIZE = 1000
 
     def __init__(self):
+        import threading
         self.patterns = INTUITION_PATTERNS
         self._experience_cache: dict[str, IntuitionResult] = {}
         self._cache_times: dict[str, float] = {}
+        self._cache_lock = threading.Lock()
 
     def classify(self, query: str, history_length: int = 0) -> IntuitionResult:
         cache_key = query.lower().strip()[:50]
@@ -265,12 +267,13 @@ class IntuitionEngine:
         self._experience_cache[cache_key] = result
         self._cache_times[cache_key] = now
         # LRU 清理：持续移除最旧条目直到降到上限以下
-        while len(self._experience_cache) > self._CACHE_MAX_SIZE:
-            sorted_keys = sorted(self._cache_times, key=self._cache_times.get)
-            to_remove = sorted_keys[:max(1, len(sorted_keys) // 4)]
-            for k in to_remove:
-                self._experience_cache.pop(k, None)
-                self._cache_times.pop(k, None)
+        with self._cache_lock:
+            while len(self._experience_cache) > self._CACHE_MAX_SIZE:
+                sorted_keys = sorted(self._cache_times, key=self._cache_times.get)
+                to_remove = sorted_keys[:max(1, len(sorted_keys) // 4)]
+                for k in to_remove:
+                    self._experience_cache.pop(k, None)
+                    self._cache_times.pop(k, None)
         return result
 
     def route_decision(self, query: str, history_length: int = 0) -> dict:

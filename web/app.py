@@ -749,7 +749,8 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
             except Exception as e:
                 logger.warning(f"Failed to save conversation memory: {e}")
 
-        asyncio.create_task(_save_conversation_memories())
+        task = asyncio.create_task(_save_conversation_memories())
+        task.add_done_callback(lambda t: logger.warning(f"Save memory task failed: {t.exception()}") if t.exception() else None)
 
 
 @socketio.on("trigger_review")
