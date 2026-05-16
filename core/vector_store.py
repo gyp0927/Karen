@@ -84,6 +84,8 @@ class NumpyBackend(VectorStoreBackend):
         self.metadatas: list[dict] = []
         self._lock = threading.RLock()
         self._dirty = False
+        # 预计算并缓存归一化向量，避免每次搜索重复计算
+        self._norm_vectors: "np.ndarray | None" = None
         self._load()
 
     def _load(self):
@@ -126,6 +128,7 @@ class NumpyBackend(VectorStoreBackend):
             self.texts.append(text)
             self.metadatas.append(metadata or {})
             self._dirty = True
+            self._norm_vectors = None  # 失效归一化缓存
             if auto_save:
                 self._save()
 
@@ -136,10 +139,12 @@ class NumpyBackend(VectorStoreBackend):
             if query_vector.shape != self.vectors[0].shape:
                 logger.warning(f"Query vector dimension mismatch")
                 return []
-            vectors = np.stack(self.vectors)
+            # 复用预计算的归一化向量，避免每次搜索重复计算
+            if self._norm_vectors is None:
+                vectors = np.stack(self.vectors)
+                self._norm_vectors = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-10)
             query_norm = query_vector / (np.linalg.norm(query_vector) + 1e-10)
-            vectors_norm = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-10)
-            similarities = np.dot(vectors_norm, query_norm)
+            similarities = np.dot(self._norm_vectors, query_norm)
             top_indices = np.argsort(similarities)[::-1][:top_k]
             return [
                 {"text": self.texts[idx], "metadata": self.metadatas[idx], "score": float(similarities[idx])}
@@ -151,6 +156,7 @@ class NumpyBackend(VectorStoreBackend):
             self.vectors.clear()
             self.texts.clear()
             self.metadatas.clear()
+            self._norm_vectors = None
             self._dirty = True
             self._save()
 
@@ -180,6 +186,7 @@ class NumpyBackend(VectorStoreBackend):
                 self.texts.pop(idx)
                 self.metadatas.pop(idx)
             if indices:
+                self._norm_vectors = None
                 self._dirty = True
                 self._save()
             return len(indices)

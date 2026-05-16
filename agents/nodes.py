@@ -288,21 +288,21 @@ def _bind_llm_params(llm, agent_name: str, provider: str):
 
 async def _invoke_llm_stream(llm, messages: list, stream_cb: Optional[Callable[[str], None]], sid: str | None, agent_name: str) -> str:
     """执行流式 LLM 调用，返回响应文本。处理超时和连接中断。"""
-    response = ""
+    response_parts: list[str] = []
 
     async def _stream():
-        nonlocal response
         async for chunk in llm.astream(messages):
             if is_stopped(sid):
                 break
             if chunk.content:
-                response += chunk.content
+                response_parts.append(chunk.content)
                 if stream_cb:
                     stream_cb(chunk.content)
 
     try:
         await asyncio.wait_for(_stream(), timeout=_LLM_STREAM_TIMEOUT)
     except asyncio.TimeoutError:
+        response = "".join(response_parts)
         logger.warning(f"[{agent_name}] LLM streaming timed out after {_LLM_STREAM_TIMEOUT}s, returning partial response ({len(response)} chars)")
     except Exception as e:
         error_name = type(e).__name__
@@ -314,7 +314,8 @@ async def _invoke_llm_stream(llm, messages: list, stream_cb: Optional[Callable[[
                 logger.info(f"[{agent_name}] Streaming interrupted but stop requested, returning partial response")
             else:
                 logger.warning(f"[{agent_name}] Streaming interrupted, retrying once: {e}")
-                if response:
+                if response_parts:
+                    response = "".join(response_parts)
                     logger.info(f"[{agent_name}] Returning partial response ({len(response)} chars)")
                 else:
                     try:
@@ -323,7 +324,7 @@ async def _invoke_llm_stream(llm, messages: list, stream_cb: Optional[Callable[[
                         logger.warning(f"[{agent_name}] LLM retry timed out after {_LLM_STREAM_TIMEOUT}s")
         else:
             raise
-    return response
+    return "".join(response_parts)
 
 
 def _write_cache_async(cache, cache_messages: list, cache_key: tuple, response: str, sid: str | None) -> None:
