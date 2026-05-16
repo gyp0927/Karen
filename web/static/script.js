@@ -25,7 +25,9 @@ try {
 }
 
 const socket = io({
-  auth: userConfig ? { api_key: userConfig.apiKey } : {}
+  auth: userConfig ? { api_key: userConfig.apiKey } : {},
+  reconnectionAttempts: 1,
+  reconnectionDelay: 1000,
 });
 
 // DOM Elements
