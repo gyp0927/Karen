@@ -25,14 +25,6 @@ def test(name):
     return decorator
 
 # ========== 测试 1: 图编译 ==========
-@test("图编译 - 协调模式")
-async def test_coordination_graph():
-    from graph.orchestrator import create_coordination_graph
-    from agents.nodes import coordinator_node, researcher_node, responder_node
-    from agents.tools import tool_caller_node
-    graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
-    assert graph is not None
-
 @test("图编译 - 快速模式")
 async def test_fast_graph():
     from graph.orchestrator import create_fast_graph
@@ -48,15 +40,6 @@ async def test_multi_agent_graph():
     assert graph is not None
 
 # ========== 测试 2: Agent 节点 ==========
-@test("Agent 节点 - Coordinator")
-async def test_coordinator():
-    from agents.nodes import coordinator_node
-    from langchain_core.messages import HumanMessage
-    state = {"messages": [HumanMessage(content="什么是量子计算？")]}
-    result = await coordinator_node(state)
-    assert "messages" in result
-    assert len(result["messages"]) > 0
-
 @test("Agent 节点 - Responder")
 async def test_responder():
     from agents.nodes import responder_node
@@ -187,43 +170,7 @@ async def test_session_manager():
     # 清理测试数据，避免污染 web 界面的会话列表
     mgr.delete_session(session_id)
 
-# ========== 测试 10: 端到端聊天（协调模式）==========
-@test("端到端 - 协调模式")
-async def test_chat_coordination():
-    from graph.orchestrator import create_coordination_graph
-    from agents.nodes import coordinator_node, researcher_node
-    from agents.tools import tool_caller_node
-    from agents.nodes import responder_node
-    from langchain_core.messages import HumanMessage
-
-    graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
-    initial_state = {
-        "messages": [HumanMessage(content="你好")],
-        "active_agent": None,
-        "task_context": {
-            "user_input": "你好",
-            "detected_language": "zh",
-            "user_id": "",
-            "mode": "coordination",
-        },
-        "human_input_required": False,
-        "base_model_response": None,
-        "review_result": None,
-        "awaiting_review": True,
-    }
-
-    final_state = None
-    async for event in graph.astream(initial_state):
-        for node_name, node_output in event.items():
-            final_state = node_output
-
-    assert final_state is not None
-    assert "messages" in final_state
-    assert len(final_state["messages"]) > 0
-    response = final_state["messages"][-1].content
-    assert response  # 只断言非空,不再要求"我是凯伦"前缀
-
-# ========== 测试 11: 端到端聊天（快速模式）==========
+# ========== 测试 10: 端到端聊天（快速模式）==========
 @test("端到端 - 快速模式")
 async def test_chat_fast():
     from graph.orchestrator import create_fast_graph
@@ -280,10 +227,8 @@ async def main():
     threading.Thread(target=_bg_memory_warmup, daemon=True, name="mem-warmup").start()
 
     tests = [
-        test_coordination_graph,
         test_fast_graph,
         test_multi_agent_graph,
-        test_coordinator,
         test_responder,
         test_web_searcher,
         test_memory_searcher,
@@ -296,7 +241,6 @@ async def main():
         test_rag,
         test_model_router,
         test_session_manager,
-        test_chat_coordination,
         test_chat_fast,
     ]
 
