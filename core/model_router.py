@@ -61,25 +61,35 @@ _KEYWORD_PATTERNS = {
 }
 
 
-@lru_cache(maxsize=256)
-def _ascii_kw_pattern(kw: str) -> re.Pattern:
-    """ASCII 关键词的词边界匹配模式（避免 "go" 误匹配 "google"）。
-
-    使用 lookaround 而非 \\b，因为 \\b 对 "c++" 这种含非词字符的关键词不工作。
-    """
-    return re.compile(r"(?<![a-z0-9_])" + re.escape(kw) + r"(?![a-z0-9_])")
+# 模块加载时一次性预编译所有关键词模式：
+# 每个类别拆为 (cjk_keywords_tuple, ascii_patterns_tuple)
+# CJK 用子串匹配(in)，ASCII 用预编译正则的词边界匹配。
+_PRECOMPILED_KEYWORDS: dict[str, tuple[tuple[str, ...], tuple[re.Pattern, ...]]] = {}
 
 
-def _count_keyword_matches(keywords: list[str], message_lower: str) -> int:
-    """匹配关键词数。ASCII 关键词用词边界，CJK 关键词用子串。"""
-    count = 0
-    for kw in keywords:
-        if kw.isascii():
-            if _ascii_kw_pattern(kw).search(message_lower):
-                count += 1
-        else:
-            if kw in message_lower:
-                count += 1
+def _precompile_all_keywords():
+    """在模块导入时一次性预编译，消除运行时重复 isascii() + lru_cache 开销。"""
+    for category, keywords in _KEYWORD_PATTERNS.items():
+        cjk = []
+        ascii_pats = []
+        for kw in keywords:
+            if kw.isascii():
+                ascii_pats.append(re.compile(r"(?<![a-z0-9_])" + re.escape(kw) + r"(?![a-z0-9_])"))
+            else:
+                cjk.append(kw)
+        _PRECOMPILED_KEYWORDS[category] = (tuple(cjk), tuple(ascii_pats))
+
+
+_precompile_all_keywords()
+
+
+def _count_keyword_matches(category: str, message_lower: str) -> int:
+    """匹配关键词数。ASCII 关键词用词边界正则，CJK 关键词用子串。"""
+    cjk_kws, ascii_pats = _PRECOMPILED_KEYWORDS[category]
+    count = sum(1 for kw in cjk_kws if kw in message_lower)
+    for pat in ascii_pats:
+        if pat.search(message_lower):
+            count += 1
     return count
 
 
@@ -104,9 +114,9 @@ class ComplexityAnalyzer:
         factors = {}
 
         # 关键词评分
-        for category, keywords in _KEYWORD_PATTERNS.items():
+        for category in _KEYWORD_PATTERNS:
             weight = self.weights.get(category, 0)
-            matched = _count_keyword_matches(keywords, message_lower)
+            matched = _count_keyword_matches(category, message_lower)
             category_score = matched * weight
             factors[category] = category_score
             score += category_score

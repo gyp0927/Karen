@@ -1,6 +1,7 @@
 """Python 代码执行沙箱 - 安全运行 Agent 生成的代码。"""
 
 import ast
+import hashlib
 import json
 import logging
 import os
@@ -11,6 +12,10 @@ import traceback
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# AST 检查结果缓存：相同代码不必重复解析（LRU，最多 128 条）
+_ast_check_cache: "dict[str, tuple[bool, Optional[SecurityError]]]" = {}
+_AST_CACHE_MAX = 128
 
 # 禁止导入的危险模块
 _FORBIDDEN_MODULES = {
@@ -67,11 +72,26 @@ class SecurityError(Exception):
 
 
 def _check_ast(code: str) -> bool:
-    """通过 AST 检查代码安全性。"""
+    """通过 AST 检查代码安全性（带缓存）。"""
+    # 用代码内容的哈希作为缓存键
+    cache_key = hashlib.blake2b(code.encode("utf-8"), digest_size=16).hexdigest()
+    cached = _ast_check_cache.get(cache_key)
+    if cached is not None:
+        ok, err = cached
+        if err is not None:
+            raise err
+        return ok
+
+    # 缓存满时清空一半（简单淘汰策略）
+    if len(_ast_check_cache) >= _AST_CACHE_MAX:
+        _ast_check_cache.clear()
+
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
-        raise SecurityError(f"语法错误: {e}")
+        err = SecurityError(f"语法错误: {e}")
+        _ast_check_cache[cache_key] = (False, err)
+        raise err
 
     for node in ast.walk(tree):
         # 禁止导入
@@ -143,6 +163,7 @@ def _check_ast(code: str) -> bool:
                 if combined in _FORBIDDEN_CALLS_GLOBAL or combined in _FORBIDDEN_ATTRS:
                     raise SecurityError(f"禁止 f-string 构造危险名称: {combined}")
 
+    _ast_check_cache[cache_key] = (True, None)
     return True
 
 

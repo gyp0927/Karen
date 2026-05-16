@@ -57,6 +57,14 @@ from web.state import (
 import web.state as _web_state
 from web.utils import _GENERATED_DIR, run_async_in_thread
 
+# 模块级预检查 tiktoken：避免每次消息处理都重复 try/import
+_tiktoken_enc = None
+try:
+    import tiktoken
+    _tiktoken_enc = tiktoken.get_encoding("cl100k_base")
+except Exception:
+    pass
+
 # 配置日志（可通过环境变量 LOG_LEVEL 调整，默认 INFO）
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -495,15 +503,12 @@ def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None
             last_msg = final_state["messages"][-1]
             resp_content = getattr(last_msg, "content", "") or ""
         # 估算 token 数：优先使用 tiktoken，回退到字符数估算
-        try:
-            import tiktoken
-            enc = tiktoken.get_encoding("cl100k_base")
-            all_content = "\n".join(m.content for m in messages_for_llm if hasattr(m, "content"))
-            prompt_tokens = len(enc.encode(all_content))
-            completion_tokens = len(enc.encode(resp_content))
-        except Exception:
+        all_content = "\n".join(m.content for m in messages_for_llm if hasattr(m, "content"))
+        if _tiktoken_enc is not None:
+            prompt_tokens = len(_tiktoken_enc.encode(all_content))
+            completion_tokens = len(_tiktoken_enc.encode(resp_content))
+        else:
             # 回退：粗略估算（1 token ≈ 3 字符）
-            all_content = "\n".join(m.content for m in messages_for_llm if hasattr(m, "content"))
             prompt_tokens = len(all_content) // 3
             completion_tokens = len(resp_content) // 3
         status = "stopped" if is_stopped(sid) else "success"
@@ -852,12 +857,13 @@ async def _async_handle_review(sid: str, expected_session_id: str):
         messages = [SystemMessage(content=reviewer_system)]
         messages.append(HumanMessage(content=review_prompt))
 
-        review_result = ""
+        review_parts: list[str] = []
         async for chunk in llm.astream(messages):
             if is_stopped(sid):
                 break
             if chunk.content:
-                review_result += chunk.content
+                review_parts.append(chunk.content)
+        review_result = "".join(review_parts)
 
         if is_stopped(sid):
             _safe_emit_review("generation_stopped", {"message": "生成已停止"})
