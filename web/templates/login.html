@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 - 凯伦</title>
+  <script>
+    (function() {
+      const theme = localStorage.getItem("theme") || "system";
+      if (theme === "system") {
+        const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+        document.documentElement.setAttribute("data-theme", prefersLight ? "light" : "dark");
+      } else {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --cfg-bg: #0a0a0f;
+      --cfg-card: #16161f;
+      --cfg-card-border: rgba(255,255,255,0.06);
+      --cfg-text: #e8e8f0;
+      --cfg-text2: #9ca3af;
+      --cfg-text3: #6b7280;
+      --cfg-accent: #00d4aa;
+      --cfg-accent-h: #00b894;
+      --cfg-err: #ef4444;
+      --cfg-radius: 14px;
+      --cfg-radius-sm: 10px;
+      --cfg-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    }
+    [data-theme="light"] {
+      --cfg-bg: #f5f7fa;
+      --cfg-card: #ffffff;
+      --cfg-card-border: rgba(0,0,0,0.06);
+      --cfg-text: #1f2937;
+      --cfg-text2: #6b7280;
+      --cfg-text3: #9ca3af;
+      --cfg-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--cfg-bg);
+      color: var(--cfg-text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      background: var(--cfg-card);
+      border: 1px solid var(--cfg-card-border);
+      border-radius: var(--cfg-radius);
+      padding: 40px 32px;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: var(--cfg-shadow);
+      margin: 20px;
+    }
+    .login-brand {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .login-brand-name {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--cfg-accent);
+      margin-bottom: 4px;
+    }
+    .login-brand-sub {
+      font-size: 0.85rem;
+      color: var(--cfg-text3);
+    }
+    .form-group { margin-bottom: 16px; }
+    .form-label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--cfg-text2);
+      margin-bottom: 6px;
+    }
+    .cfg-input {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--cfg-bg);
+      border: 1.5px solid var(--cfg-card-border);
+      border-radius: var(--cfg-radius-sm);
+      color: var(--cfg-text);
+      font-size: 0.95rem;
+      outline: none;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    .cfg-input:focus {
+      border-color: var(--cfg-accent);
+      box-shadow: 0 0 0 3px rgba(16,163,127,0.15);
+    }
+    .cfg-input::placeholder { color: var(--cfg-text3); }
+    .btn {
+      width: 100%;
+      padding: 12px 20px;
+      border: none;
+      border-radius: var(--cfg-radius-sm);
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-family: inherit;
+      margin-top: 8px;
+    }
+    .btn-primary {
+      background: var(--cfg-accent);
+      color: white;
+    }
+    .btn-primary:hover { background: var(--cfg-accent-h); transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .login-hint {
+      text-align: center;
+      margin-top: 16px;
+      font-size: 0.8rem;
+      color: var(--cfg-text3);
+    }
+    .toast {
+      position: fixed;
+      top: 68px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-20px);
+      padding: 12px 24px;
+      border-radius: var(--cfg-radius-sm);
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: white;
+      z-index: 10000;
+      opacity: 0;
+      transition: all 0.3s;
+      pointer-events: none;
+      box-shadow: var(--cfg-shadow);
+      white-space: nowrap;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    .toast.err { background: var(--cfg-err); }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="login-brand">
+      <div class="login-brand-name">凯伦</div>
+      <div class="login-brand-sub">登录你的账号</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">用户名</label>
+      <input type="text" class="cfg-input" id="userName" placeholder="输入用户名" autofocus>
+    </div>
+    <div class="form-group">
+      <label class="form-label">密码</label>
+      <input type="password" class="cfg-input" id="userPassword" placeholder="输入密码">
+    </div>
+    <button class="btn btn-primary" id="loginBtn">登录</button>
+    <div class="login-hint">
+      需要账号？请联系管理员
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    document.getElementById("loginBtn").addEventListener("click", async () => {
+      const name = document.getElementById("userName").value.trim();
+      const password = document.getElementById("userPassword").value.trim();
+
+      if (!name) { showToast("请输入用户名", true); return; }
+      if (!password) { showToast("请输入密码", true); return; }
+
+      const btn = document.getElementById("loginBtn");
+      btn.disabled = true;
+      btn.textContent = "登录中...";
+
+      try {
+        const resp = await fetch("/api/auth/login-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, password })
+        });
+        const data = await resp.json();
+        if (data.success) {
+          window.location.href = "/";
+        } else {
+          showToast(data.message || "登录失败", true);
+        }
+      } catch (e) {
+        showToast("登录失败", true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "登录";
+      }
+    });
+
+    document.getElementById("userPassword").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("loginBtn").click();
+    });
+
+    function showToast(message, isError = false) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.className = "toast " + (isError ? "err show" : "show");
+      setTimeout(() => toast.classList.remove("show"), 2500);
+    }
+  </script>
+</body>
+</html>

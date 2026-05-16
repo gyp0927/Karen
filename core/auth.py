@@ -16,11 +16,17 @@ import secrets
 import sqlite3
 import threading
 import time
+
+try:
+    import bcrypt
+    _BCRYPT_AVAILABLE = True
+except ImportError:
+    _BCRYPT_AVAILABLE = False
 import uuid
 from functools import wraps
 from typing import Optional
 
-from flask import request
+from flask import request, session
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +132,8 @@ def init_auth_db():
                 conn.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
             if "key_salt" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN key_salt TEXT DEFAULT ''")
+            if "password_hash" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT ''")
             conn.commit()
         finally:
             conn.close()
@@ -159,7 +167,21 @@ def _legacy_hash(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
-def create_user(name: str, api_key: str, config: dict = None, role: str = "user") -> User:
+def _hash_password(password: str) -> str:
+    """bcrypt 哈希密码（12 轮次）"""
+    if not _BCRYPT_AVAILABLE:
+        raise RuntimeError("bcrypt not installed")
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+def _check_password(password: str, hashed: str) -> bool:
+    """验证 bcrypt 密码"""
+    if not _BCRYPT_AVAILABLE or not hashed:
+        return False
+    return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+
+
+def create_user(name: str, api_key: str, config: dict = None, role: str = "user", password: str = "") -> User:
     """创建新用户。"""
     with _lock:
         conn = _get_conn()
@@ -168,10 +190,11 @@ def create_user(name: str, api_key: str, config: dict = None, role: str = "user"
             salt_bytes = secrets.token_bytes(16)
             key_hash = _derive_key(api_key, salt_bytes)
             key_salt = salt_bytes.hex()
+            password_hash = _hash_password(password) if password and _BCRYPT_AVAILABLE else ""
             now = time.time()
             conn.execute(
-                "INSERT INTO users (id, name, api_key_hash, key_salt, config_json, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, name, key_hash, key_salt, json.dumps(config or {}), role, now)
+                "INSERT INTO users (id, name, api_key_hash, key_salt, password_hash, config_json, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, name, key_hash, key_salt, password_hash, json.dumps(config or {}), role, now)
             )
             conn.commit()
             logger.info(f"Created user: {user_id} ({name}) role={role}")
@@ -219,6 +242,46 @@ def authenticate(api_key: str, ip: str = "") -> Optional[User]:
                         break
 
             if row:
+                user = User(
+                    row["id"],
+                    row["name"],
+                    json.loads(row["config_json"] or "{}"),
+                    row.get("role", "user"),
+                )
+            else:
+                user = None
+        finally:
+            conn.close()
+
+    if user:
+        with _auth_rate_lock:
+            _auth_failures.pop(ip, None)
+        return user
+    _record_auth_failure(ip)
+    return None
+
+
+def authenticate_password(name: str, password: str, ip: str = "") -> Optional[User]:
+    """通过用户名和密码验证用户。
+
+    ip 用于触发 per-IP 失败次数限流，防止密码暴力破解。
+    """
+    if not name or not password:
+        return None
+
+    if not _check_rate_limit(ip):
+        logger.warning(f"Password auth rate-limited from ip={ip}")
+        return None
+
+    with _lock:
+        conn = _get_conn()
+        try:
+            cursor = conn.execute(
+                "SELECT id, name, config_json, role, password_hash FROM users WHERE name = ?",
+                (name,)
+            )
+            row = cursor.fetchone()
+            if row and row.get("password_hash") and _check_password(password, row["password_hash"]):
                 user = User(
                     row["id"],
                     row["name"],
@@ -312,21 +375,30 @@ def auth_required(f):
     """认证装饰器（用于 HTTP 路由）。
 
     如果认证未启用，直接放行。
-    否则检查 X-API-Key Header 或 api_key Cookie。
-    对于修改性操作（POST/PUT/DELETE/PATCH）强制要求 Header 认证，防止 CSRF。
+    优先检查 Session 认证（session["user_id"]），回退到 API Key 认证。
+    对于修改性操作（POST/PUT/DELETE/PATCH）使用 API Key 时强制要求 Header 认证，防止 CSRF。
     """
     @wraps(f)
     def decorated(*args, **kwargs):
         if not AUTH_ENABLED:
             return f(*args, **kwargs)
 
-        # 修改性操作强制使用 Header 认证，不接受 Cookie（防 CSRF）
-        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-            api_key = request.headers.get("X-API-Key", "")
-        else:
-            api_key = request.headers.get("X-API-Key", "") or request.cookies.get("api_key", "")
-        ip = request.remote_addr or ""
-        user = authenticate(api_key, ip=ip)
+        user = None
+
+        # 1. 优先检查 Session 认证
+        user_id = session.get("user_id")
+        if user_id:
+            user = get_user_by_id(user_id)
+
+        # 2. Session 无用户，回退到 API Key 认证
+        if not user:
+            if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+                api_key = request.headers.get("X-API-Key", "")
+            else:
+                api_key = request.headers.get("X-API-Key", "") or request.cookies.get("api_key", "")
+            ip = request.remote_addr or ""
+            user = authenticate(api_key, ip=ip)
+
         if not user:
             return {"success": False, "message": "未认证，请提供有效的 API Key"}, 401
 
@@ -347,9 +419,19 @@ def admin_required(f):
         if not AUTH_ENABLED:
             return f(*args, **kwargs)
 
-        api_key = request.headers.get("X-API-Key", "")
-        ip = request.remote_addr or ""
-        user = authenticate(api_key, ip=ip)
+        user = None
+
+        # 1. 优先检查 Session 认证
+        user_id = session.get("user_id")
+        if user_id:
+            user = get_user_by_id(user_id)
+
+        # 2. Session 无用户，回退到 API Key 认证
+        if not user:
+            api_key = request.headers.get("X-API-Key", "")
+            ip = request.remote_addr or ""
+            user = authenticate(api_key, ip=ip)
+
         if not user:
             return {"success": False, "message": "未认证，请提供有效的 API Key"}, 401
         if user.role != "admin":

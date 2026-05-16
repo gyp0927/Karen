@@ -18,7 +18,7 @@ import traceback
 from core.utils import detect_language
 from core.i18n import LANG_NAMES, get_lang_instruction
 
-from flask import Flask, render_template, request, send_file
+from flask import Flask, render_template, request, send_file, session
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -378,18 +378,27 @@ def on_connect(auth):
     logger.info(f"Client connected: sid={sid}")
 
     if AUTH_ENABLED:
-        api_key = ""
-        if auth and isinstance(auth, dict):
-            api_key = (auth.get("api_key") or "").strip()
-        if not api_key:
-            api_key = request.args.get("api_key", "").strip()
-        if not api_key:
-            logger.warning(f"Connection rejected: no api_key from sid={sid}")
-            return False
-        user = authenticate(api_key, ip=_get_real_remote_addr() or "")
+        user = None
+
+        # 1. 优先检查 Session 认证
+        user_id = session.get("user_id")
+        if user_id:
+            user = get_user_by_id(user_id)
+
+        # 2. Session 无用户，回退到 API Key 认证
         if not user:
-            logger.warning(f"Connection rejected: invalid api_key from sid={sid}")
+            api_key = ""
+            if auth and isinstance(auth, dict):
+                api_key = (auth.get("api_key") or "").strip()
+            if not api_key:
+                api_key = request.args.get("api_key", "").strip()
+            if api_key:
+                user = authenticate(api_key, ip=_get_real_remote_addr() or "")
+
+        if not user:
+            logger.warning(f"Connection rejected: no valid auth from sid={sid}")
             return False
+
         state = get_socket_state(sid)
         state.set_user_id(user.id)
         logger.info(f"User authenticated: {user.name} (id={user.id})")

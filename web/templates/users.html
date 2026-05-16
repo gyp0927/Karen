@@ -396,6 +396,10 @@
         <input type="text" class="cfg-input" id="userApiKey" placeholder="用户登录用的 API Key">
       </div>
       <div class="form-group">
+        <label class="form-label">密码</label>
+        <input type="password" class="cfg-input" id="userPassword" placeholder="设置登录密码（可选）">
+      </div>
+      <div class="form-group">
         <label class="form-label">角色</label>
         <select class="cfg-input" id="userRole">
           <option value="user">普通用户</option>
@@ -449,6 +453,7 @@
       addUserForm.classList.add("hidden");
       document.getElementById("userName").value = "";
       document.getElementById("userApiKey").value = "";
+      document.getElementById("userPassword").value = "";
       document.getElementById("userRole").value = "user";
     }
 
@@ -518,6 +523,7 @@
     document.getElementById("createBtn").addEventListener("click", async () => {
       const name = document.getElementById("userName").value.trim();
       const apiKey = document.getElementById("userApiKey").value.trim();
+      const password = document.getElementById("userPassword").value.trim();
       const role = document.getElementById("userRole").value;
 
       if (!name) { showToast("请填写用户名", true); return; }
@@ -527,7 +533,7 @@
         const resp = await fetch("/api/auth/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, apiKey, role })
+          body: JSON.stringify({ name, apiKey, role, password })
         });
         const data = await resp.json();
         if (data.success) {

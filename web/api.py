@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from flask import Blueprint, request, send_file, render_template
+from flask import Blueprint, request, send_file, render_template, redirect, session
 from werkzeug.utils import secure_filename
 
 api_bp = Blueprint("api", __name__)
@@ -25,7 +25,7 @@ def _get_generated_dir():
 
 from core.auth import (
     auth_required, admin_required, AUTH_ENABLED, create_user, authenticate,
-    get_user_by_id, list_users, delete_user, update_user_config,
+    authenticate_password, get_user_by_id, list_users, delete_user, update_user_config,
 )
 from core.config import PROVIDER_NAMES, BASE_URLS
 from core.export import export_markdown, export_json, export_html, export_pdf, get_export_filename
@@ -43,6 +43,10 @@ from web.state import has_valid_config
 
 @api_bp.route("/")
 def index():
+    if AUTH_ENABLED and not session.get("user_id"):
+        api_key = request.cookies.get("api_key", "")
+        if not api_key or not authenticate(api_key):
+            return redirect("/login")
     return render_template("index.html")
 
 
@@ -65,6 +69,15 @@ def plugins_page():
 @admin_required
 def users_page():
     return render_template("users.html")
+
+
+@api_bp.route("/login")
+def login_page():
+    if not AUTH_ENABLED:
+        return redirect("/")
+    if session.get("user_id"):
+        return redirect("/")
+    return render_template("login.html")
 
 
 @api_bp.route("/api/upload", methods=["POST"])
@@ -935,11 +948,12 @@ def register_api():
         name = data.get("name", "").strip()
         api_key = data.get("apiKey", "").strip()
         role = data.get("role", "user").strip()
+        password = data.get("password", "").strip()
         if not name:
             return {"success": False, "message": "请填写用户名"}, 400
         if not api_key:
             return {"success": False, "message": "请提供 API Key"}, 400
-        user = create_user(name, api_key, role=role)
+        user = create_user(name, api_key, role=role, password=password)
         return {"success": True, "user": user.to_dict()}
     except ValueError as e:
         return {"success": False, "message": str(e)}, 400
@@ -965,6 +979,35 @@ def login_api():
     except Exception as e:
         logger.exception("Login failed")
         return {"success": False, "message": str(e)}, 500
+
+
+@api_bp.route("/api/auth/login-password", methods=["POST"])
+def login_password_api():
+    """用户名密码登录，成功后设置 Session"""
+    if not AUTH_ENABLED:
+        return {"success": False, "message": "认证系统未启用"}, 400
+    try:
+        data = request.get_json() or {}
+        name = data.get("name", "").strip()
+        password = data.get("password", "").strip()
+        if not name or not password:
+            return {"success": False, "message": "请填写用户名和密码"}, 400
+        user = authenticate_password(name, password, ip=request.remote_addr or "")
+        if not user:
+            return {"success": False, "message": "用户名或密码错误"}, 401
+        session["user_id"] = user.id
+        session.permanent = True
+        return {"success": True, "user": user.to_dict()}
+    except Exception as e:
+        logger.exception("Password login failed")
+        return {"success": False, "message": str(e)}, 500
+
+
+@api_bp.route("/api/auth/logout", methods=["POST"])
+def logout_api():
+    """退出登录，清除 Session"""
+    session.pop("user_id", None)
+    return {"success": True, "message": "已退出登录"}
 
 
 @api_bp.route("/api/auth/users", methods=["GET"])
