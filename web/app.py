@@ -30,7 +30,7 @@ from agents.llm import (
 )
 from agents.search import web_searcher_agent, memory_searcher_agent
 from agents.tools import tool_caller_node
-from state.stop_flag import clear_stop, is_stopped
+from state.stop_flag import clear_stop, is_stopped, set_stop
 from state.model_config_manager import (
     list_configs, list_configs_full, get_config, get_active_config,
     add_config, update_config, delete_config, set_active_config, sync_to_env

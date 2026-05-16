@@ -32,6 +32,7 @@ const socket = io({
 
 // DOM Elements
 const chatMessages = document.getElementById("chatMessages");
+const chatMain = document.getElementById("chatMain");
 const chatInput = document.getElementById("chatInput");
 const sendBtn = document.getElementById("sendBtn");
 const emptyState = document.getElementById("emptyState");
@@ -400,7 +401,7 @@ function appendMessage(content, type, sender, stream = false) {
       </div>
     `;
     chatMessages.appendChild(div);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatMain.scrollTop = chatMain.scrollHeight;
   } else {
     // AI 消息：创建容器，流式显示 (avatar on the left by default)
     div.innerHTML = `
@@ -417,7 +418,7 @@ function appendMessage(content, type, sender, stream = false) {
       </div>
     `;
     chatMessages.appendChild(div);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatMain.scrollTop = chatMain.scrollHeight;
 
     div.querySelector(".message-content").innerHTML = safeRenderMarkdown(content);
     div.querySelectorAll("pre code").forEach(block => {
@@ -440,7 +441,7 @@ function showThinking(text) {
   if (div) {
     const span = div.querySelector(".thinking-msg span");
     if (span) span.textContent = text;
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatMain.scrollTop = chatMain.scrollHeight;
     return;
   }
   div = document.createElement("div");
@@ -674,19 +675,19 @@ let _sendMessageTimeout = null;  // send_message 超时保护计时器
 const REVEAL_BASE_CPS = 55;
 
 // 监听滚动:用户向上滚停止跟随;回到接近底部恢复跟随
-if (chatMessages) {
-  chatMessages.addEventListener("wheel", (e) => {
+if (chatMain) {
+  chatMain.addEventListener("wheel", (e) => {
     if (e.deltaY < 0) {
       _autoFollow = false;
     }
   }, { passive: true });
-  chatMessages.addEventListener("touchmove", () => {
+  chatMain.addEventListener("touchmove", () => {
     // 触屏上滑无法直接判方向,用滚动位置判
-    const distFromBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+    const distFromBottom = chatMain.scrollHeight - chatMain.scrollTop - chatMain.clientHeight;
     if (distFromBottom > 80) _autoFollow = false;
   }, { passive: true });
-  chatMessages.addEventListener("scroll", () => {
-    const distFromBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+  chatMain.addEventListener("scroll", () => {
+    const distFromBottom = chatMain.scrollHeight - chatMain.scrollTop - chatMain.clientHeight;
     if (distFromBottom < 40) _autoFollow = true;
   }, { passive: true });
 }
@@ -726,7 +727,7 @@ function _revealStep(now) {
     _pendingChars = _pendingChars.slice(reveal);
     _streamTextNode.appendData(slice);
     if (_autoFollow) {
-      chatMessages.scrollTop = chatMessages.scrollHeight;
+      chatMain.scrollTop = chatMain.scrollHeight;
     }
   }
 
