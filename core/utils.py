@@ -1,5 +1,7 @@
 """通用工具函数"""
 import re
+import threading
+from typing import Callable
 
 
 def detect_language(text: str) -> str:
@@ -41,3 +43,16 @@ def detect_language(text: str) -> str:
         return "en"
 
     return "zh"
+
+
+def spawn_bg(fn, *args, **kwargs) -> None:
+    """把一个同步函数扔后台 daemon 线程跑,不阻塞事件循环。
+
+    用于 stats.db / cache.db 等同步 SQLite 写——之前用 asyncio.to_thread + create_task
+    会占用 LangGraph 默认线程池并多绕一层 asyncio Task。daemon 线程更轻量,
+    主进程退出即结束。
+    """
+    try:
+        threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
+    except Exception:
+        pass

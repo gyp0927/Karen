@@ -130,24 +130,15 @@ def _replay_stream(stream_cb: Optional[Callable[[str], None]], text: str, sid: s
         stream_cb(text[i:i + _REPLAY_CHUNK_SIZE])
 
 
-def _spawn_bg(fn: Callable, *args, **kwargs) -> None:
-    """把一个同步函数扔后台 daemon 线程跑,不阻塞事件循环。
-
-    用于 stats.db / cache.db 等同步 SQLite 写——之前用 asyncio.to_thread + create_task
-    会占用 LangGraph 默认线程池并多绕一层 asyncio Task。daemon 线程更轻量,
-    主进程退出即结束。
-    """
-    try:
-        threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
-    except Exception as e:
-        logger.debug(f"bg thread spawn failed: {e}")
 
 
 def _estimate_tokens(text: str) -> int:
     """粗估 token 数。中文字符 ≈1 token/字,英文 ≈1 token/4 字符。"""
     if not text:
         return 0
-    chinese_chars = sum(1 for c in text if "一" <= c <= "鿿")
+    # 覆盖 CJK 统一表意文字基本区 + 扩展 A-G 区（通过 unicodedata.category）
+    import unicodedata
+    chinese_chars = sum(1 for c in text if unicodedata.category(c) == 'Lo')
     non_chinese = len(text) - chinese_chars
     return max(1, chinese_chars + non_chinese // 4)
 
@@ -344,7 +335,8 @@ def _write_cache_async(cache, cache_messages: list, cache_key: tuple, response: 
             cache.set(cache_messages, cache_key[0], cache_key[1], response)
         except (OSError, ValueError) as e:
             logger.warning(f"Cache write failed: {e}")
-    _spawn_bg(_cache_write)
+    from core.utils import spawn_bg
+    spawn_bg(_cache_write)
 
 
 def _build_empty_fallback(agent_name: str, cognitive_state: CognitiveState | None, enable_cognition: bool) -> dict:
@@ -426,7 +418,8 @@ async def _run_agent(
                 stream_cb = on_token if on_token else (get_streaming_callback(sid) if agent_name == "responder" else None)
                 response = await _invoke_llm_stream(llm, messages, stream_cb, sid, agent_name)
         except Exception:
-            _spawn_bg(
+            from core.utils import spawn_bg
+            spawn_bg(
                 _record_llm_call, agent_name, sid, messages, "",
                 int((time.time() - _llm_t0) * 1000), "error",
             )
@@ -435,7 +428,8 @@ async def _run_agent(
     # ---- Phase 7: 统计记录 ----
     _llm_duration_ms = int((time.time() - _llm_t0) * 1000)
     _llm_status = "stopped" if is_stopped(sid) else "success"
-    _spawn_bg(
+    from core.utils import spawn_bg
+    spawn_bg(
         _record_llm_call, agent_name, sid, messages, response, _llm_duration_ms, _llm_status,
     )
 

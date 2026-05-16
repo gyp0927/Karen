@@ -88,8 +88,10 @@ class ResponseCache:
         """判断是否应该跳过缓存。"""
         # 检查消息中是否包含敏感关键词
         skip_keywords = [
-            "密码", "password", "token", "secret", "api_key",
+            "密码", "password", "token", "secret", "api_key", "apikey", "api-key",
             "身份证", "手机号", "信用卡", "cvv",
+            "密钥", "key", "secret_key", "private_key",
+            "access_token", "bearer", "auth",
         ]
         for msg in messages:
             content = getattr(msg, "content", "")

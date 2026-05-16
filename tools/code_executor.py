@@ -121,6 +121,28 @@ def _check_ast(code: str) -> bool:
                 if node.value.attr in _FORBIDDEN_ATTRS:
                     raise SecurityError(f"禁止通过下标访问 dunder 属性: .{node.value.attr}[...]")
 
+        # 禁止字符串拼接构造危险名称（如 '__im' + 'port__'）
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
+                if isinstance(node.left.value, str) and isinstance(node.right.value, str):
+                    combined = node.left.value + node.right.value
+                    if combined in _FORBIDDEN_CALLS_GLOBAL or combined in _FORBIDDEN_ATTRS:
+                        raise SecurityError(f"禁止拼接构造危险名称: {combined}")
+
+        # 禁止 f-string 拼接构造危险名称
+        if isinstance(node, ast.JoinedStr):
+            parts = []
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    parts.append(value.value)
+                else:
+                    parts = []
+                    break
+            if parts:
+                combined = "".join(parts)
+                if combined in _FORBIDDEN_CALLS_GLOBAL or combined in _FORBIDDEN_ATTRS:
+                    raise SecurityError(f"禁止 f-string 构造危险名称: {combined}")
+
     return True
 
 

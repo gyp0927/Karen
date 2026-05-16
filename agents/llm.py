@@ -51,7 +51,8 @@ def _get_http_async_client():
         _httpx_clients[key] = client
         if len(_httpx_clients) > _HTTPX_MAX_CLIENTS:
             _, old_client = _httpx_clients.popitem(last=False)
-            _spawn_bg(_close_httpx_client, old_client)
+            from core.utils import spawn_bg
+            spawn_bg(_close_httpx_client, old_client)
         logger.debug(f"Async HTTP client created for thread={thread_id}, loop={loop_id}")
         return client
 
@@ -68,9 +69,6 @@ def _close_httpx_client(client):
         pass
 
 
-def _spawn_bg(fn, *args, **kwargs):
-    """后台 daemon 线程执行同步函数。"""
-    threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
 
 
 # ========== LLM 配置隔离 ==========
