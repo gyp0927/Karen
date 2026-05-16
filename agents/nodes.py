@@ -514,29 +514,56 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
     # query 已在上面意图分类时找到最后一个 HumanMessage，直接复用
     original_query = query
 
-    # ---- 异步搜索：启动搜索，最多等待 1.2 秒 ----
+    # ---- 异步搜索：优先使用预启动的搜索任务（和 LLM 并行），
+    # 没有预启动或已超时的再自己启动 ----
     if needs_search or needs_memory:
-        try:
-            search_context = await asyncio.wait_for(
-                run_parallel_search(state),
-                timeout=2.0,
-            )
-            if search_context:
-                search_msg = SystemMessage(
-                    content=(
-                        f"{search_context}\n\n"
-                        "请基于以上搜索结果生成最终回答，"
-                        "涉及实时信息、最新数据、价格、天气等时效内容时，"
-                        "优先以此处的搜索结果为准，而非你的训练知识。"
-                    ),
-                    name="search_result",
+        search_context = ""
+        # 1. 尝试获取预启动的搜索任务（handle_message 中已提前启动）
+        pre_task = None
+        if sid:
+            try:
+                from web.state import socket_states
+                s = socket_states.get(sid)
+                if s and getattr(s, "pending_search", None) is not None:
+                    pre_task = s.pending_search
+                    s.pending_search = None  # 取走，防止重复使用
+            except Exception:
+                pass
+
+        if pre_task is not None:
+            try:
+                # 已经提前启动，最多再等 0.5s（搜索可能已经完成了）
+                search_context = await asyncio.wait_for(pre_task, timeout=0.5)
+                if search_context:
+                    logger.info(f"[responder] Pre-started search returned in time for sid={sid}")
+            except asyncio.TimeoutError:
+                logger.info(f"[responder] Pre-started search not ready for sid={sid}, proceeding")
+            except Exception as e:
+                logger.warning(f"[responder] Pre-started search failed: {e}")
+        else:
+            # 没有预启动的任务，自己启动（兼容旧路径 / 兜底）
+            try:
+                search_context = await asyncio.wait_for(
+                    run_parallel_search(state),
+                    timeout=1.5,
                 )
-                state = dict(state)
-                state["messages"] = list(state.get("messages", [])) + [search_msg]
-        except asyncio.TimeoutError:
-            logger.info("[responder] Search timeout (2.0s), proceeding with knowledge")
-        except Exception as e:
-            logger.warning(f"[responder] Search failed: {e}")
+            except asyncio.TimeoutError:
+                logger.info("[responder] Search timeout (1.5s), proceeding with knowledge")
+            except Exception as e:
+                logger.warning(f"[responder] Search failed: {e}")
+
+        if search_context:
+            search_msg = SystemMessage(
+                content=(
+                    f"{search_context}\n\n"
+                    "请基于以上搜索结果生成最终回答，"
+                    "涉及实时信息、最新数据、价格、天气等时效内容时，"
+                    "优先以此处的搜索结果为准，而非你的训练知识。"
+                ),
+                name="search_result",
+            )
+            state = dict(state)
+            state["messages"] = list(state.get("messages", [])) + [search_msg]
 
     # ---- 工具调用判断（用原始 query，不能用注入搜索后的 messages[-1]）----
     tools = None

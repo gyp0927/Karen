@@ -601,6 +601,28 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         "awaiting_review": True
     }
 
+    # === 提前启动搜索（和 LLM 回复并行）===
+    # responder_node 到达时如果搜索已完成直接用结果，
+    # 未完成也最多等 0.5s，不阻塞整体回复速度。
+    async def _pre_search():
+        from agents.search import run_parallel_search
+        search_state = {
+            "messages": messages_for_llm,
+            "task_context": {
+                "user_id": state.user_id,
+                "session_id": expected_session_id,
+                "mode": current_mode,
+            },
+        }
+        return await run_parallel_search(search_state)
+
+    if state.pending_search is not None:
+        # 清理上一轮遗留的搜索任务
+        if not state.pending_search.done():
+            state.pending_search.cancel()
+        state.pending_search = None
+    state.pending_search = asyncio.create_task(_pre_search())
+
     # 始终使用快速模式图
     graph = _web_state.fast_graph
 

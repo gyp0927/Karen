@@ -33,6 +33,8 @@ class SocketState:
         self.review_language = "zh"
         self.detected_language: str | None = None
         self.last_active = time.time()
+        # 预启动的搜索任务（和 LLM 回复并行）
+        self.pending_search: "asyncio.Task | None" = None
 
     def touch(self):
         """更新最后活跃时间。"""

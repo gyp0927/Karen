@@ -25,7 +25,7 @@ _MAX_FETCH_WORKERS = 3
 _MAX_RETRIES = 2
 
 # 快速模式专用超时（ aggressive —— 快速模式追求速度而非 completeness ）
-_FAST_SEARCH_TIMEOUT = 2
+_FAST_SEARCH_TIMEOUT = 1.5
 _FAST_FETCH_TIMEOUT = 3
 _FAST_MAX_RETRIES = 1
 _FAST_MAX_FETCH_WORKERS = 2
@@ -277,21 +277,58 @@ def duckduckgo_search(query: str, max_results: int = 2, fast_mode: bool = False)
     - 中文 query：360 → Bing → DDG（DDG 对中文时事查询常返回垃圾/无关结果）
     - 英文 query：DDG → 360 → Bing
 
+    fast_mode 下并发启动所有源，取最快成功的结果（而非串行 fallback），
+    整体耗时 = min(各源耗时)，大幅提升搜索成功率且不拖慢回复。
+
     Args:
-        fast_mode: 快速模式——减少超时和重试次数，优先返回结果速度。
+        fast_mode: 快速模式——并发多源、减少超时和重试，优先返回结果速度。
     """
     cached = _get_cached_search(query)
     if cached is not None:
         return cached
 
-    # 快速模式仍保留一条 fallback：中文 query 先 360(国内可达),非中文先 DDG。
-    # Why: 之前 fast 只挂 DDG,在国内网络下 DDG 直接抓不到,中文 query 返回 0 结果。
     is_cn = bool(_CJK_RE.search(query))
+
     if fast_mode:
-        # fast mode 只用一个最快源，不 fallback 到慢源（避免拖累整体响应）
-        sources = [("360_search", _so_search)] if is_cn \
-            else [("ddg_library", _try_ddg_library)]
-    elif is_cn:
+        # fast 模式：并发所有源，谁快用谁
+        search_timeout = _FAST_SEARCH_TIMEOUT
+        if is_cn:
+            sources = [
+                ("360_search", _so_search),
+                ("bing", _bing_search),
+            ]
+        else:
+            sources = [
+                ("ddg_library", _try_ddg_library),
+                ("360_search", _so_search),
+            ]
+
+        def _run_source(name_fn):
+            name, fn = name_fn
+            try:
+                return name, fn(query, max_results, timeout=search_timeout)
+            except Exception as e:
+                return name, e
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=len(sources)) as exe:
+            futures = {exe.submit(_run_source, s): s[0] for s in sources}
+            for future in as_completed(futures):
+                try:
+                    source_name, result = future.result()
+                    if isinstance(result, list) and result:
+                        logger.info(
+                            f"Search '{query}' via {source_name}: {len(result)} results"
+                        )
+                        _set_cached_search(query, result)
+                        return result
+                except Exception:
+                    pass
+        logger.warning(f"All search sources failed for query: {query}")
+        return []
+
+    # 非 fast 模式：串行 fallback（保证 completeness）
+    if is_cn:
         sources = [
             ("360_search", _so_search),
             ("bing", _bing_search),
@@ -304,9 +341,8 @@ def duckduckgo_search(query: str, max_results: int = 2, fast_mode: bool = False)
             ("bing", _bing_search),
         ]
 
-    max_retries = _FAST_MAX_RETRIES if fast_mode else _MAX_RETRIES
-    search_timeout = _FAST_SEARCH_TIMEOUT if fast_mode else _SEARCH_TIMEOUT
-
+    max_retries = _MAX_RETRIES
+    search_timeout = _SEARCH_TIMEOUT
     last_error = None
 
     for source_name, source_fn in sources:
@@ -331,7 +367,7 @@ def duckduckgo_search(query: str, max_results: int = 2, fast_mode: bool = False)
                     f"failed for '{query}': {e}"
                 )
                 if attempt < max_retries - 1:
-                    time.sleep(0.3 * (attempt + 1) if fast_mode else 0.5 * (attempt + 1))
+                    time.sleep(0.5 * (attempt + 1))
 
     logger.warning(
         f"All search sources failed for query: {query} - {last_error}"
