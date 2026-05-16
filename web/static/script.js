@@ -824,9 +824,26 @@ socket.on("stream_end", (data) => {
     if (contentEl) {
       const finalText = data.message || streamBuffer;
       contentEl.innerHTML = safeRenderMarkdown(finalText);
-      contentEl.querySelectorAll("pre code").forEach(block => {
-        hljs.highlightElement(block);
-      });
+      // 代码高亮延迟到浏览器空闲时执行，避免长消息阻塞主线程
+      const blocks = contentEl.querySelectorAll("pre code");
+      if (blocks.length <= 3) {
+        // 少量代码块直接高亮
+        blocks.forEach(block => hljs.highlightElement(block));
+      } else {
+        // 大量代码块分批延迟高亮
+        const arr = Array.from(blocks);
+        const BATCH = 3;
+        let idx = 0;
+        function highlightBatch() {
+          for (let i = 0; i < BATCH && idx < arr.length; i++, idx++) {
+            hljs.highlightElement(arr[idx]);
+          }
+          if (idx < arr.length) {
+            requestAnimationFrame(highlightBatch);
+          }
+        }
+        requestAnimationFrame(highlightBatch);
+      }
     }
     currentStreamElement.classList.remove("streaming");
     currentStreamElement = null;

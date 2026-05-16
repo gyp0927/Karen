@@ -1007,7 +1007,8 @@ def handle_get_available_models():
     import requests
     models = []
     try:
-        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+        # Ollama 本地调用通常 <100ms，1s 超时快速失败避免阻塞线程
+        resp = requests.get("http://localhost:11434/api/tags", timeout=1)
         if resp.status_code == 200:
             data = resp.json()
             for m in data.get("models", []):

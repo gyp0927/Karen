@@ -13,6 +13,7 @@ import os
 import re
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -117,7 +118,7 @@ def _fetch(url: str, timeout: int = _FETCH_TIMEOUT) -> str:
 
 # ========== 缓存（带 TTL 和容量上限 + 线程安全锁） ==========
 
-_search_cache: dict[str, tuple[float, list[dict]]] = {}
+_search_cache: "OrderedDict[str, tuple[float, list[dict]]]" = OrderedDict()
 _SEARCH_CACHE_TTL = 300
 _SEARCH_CACHE_MAX_SIZE = 200
 _search_cache_lock = threading.Lock()
@@ -129,24 +130,26 @@ def _get_cached_search(query: str) -> list[dict] | None:
             ts, results = _search_cache[query]
             if time.time() - ts < _SEARCH_CACHE_TTL:
                 logger.debug(f"Search cache hit: '{query}'")
+                # LRU: 命中后移到末尾（最新）
+                _search_cache.move_to_end(query)
                 return results
+            # 过期则删除
+            del _search_cache[query]
     return None
 
 
 def _set_cached_search(query: str, results: list[dict]):
     with _search_cache_lock:
-        # 超出容量时清理最旧的条目
-        if len(_search_cache) >= _SEARCH_CACHE_MAX_SIZE:
-            now = time.time()
-            # 先清过期项
-            expired = [k for k, (ts, _) in _search_cache.items() if now - ts > _SEARCH_CACHE_TTL]
-            for k in expired:
-                del _search_cache[k]
-            # 仍超则清最早的
-            if len(_search_cache) >= _SEARCH_CACHE_MAX_SIZE:
-                oldest = min(_search_cache, key=lambda k: _search_cache[k][0])
-                del _search_cache[oldest]
-        _search_cache[query] = (time.time(), results)
+        now = time.time()
+        # 先清过期项（全量扫描，但只在写入时触发且 dict 通常不大）
+        expired = [k for k, (ts, _) in _search_cache.items() if now - ts > _SEARCH_CACHE_TTL]
+        for k in expired:
+            del _search_cache[k]
+        # 写入新条目
+        _search_cache[query] = (now, results)
+        # 超出容量时从头部弹出最旧的条目（OrderedDict O(1)）
+        while len(_search_cache) > _SEARCH_CACHE_MAX_SIZE:
+            _search_cache.popitem(last=False)
 
 
 # ========== 解析通用函数 ==========
