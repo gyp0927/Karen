@@ -9,6 +9,8 @@
 import json
 import logging
 import os
+import re
+from functools import lru_cache
 from typing import Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -59,6 +61,28 @@ _KEYWORD_PATTERNS = {
 }
 
 
+@lru_cache(maxsize=256)
+def _ascii_kw_pattern(kw: str) -> re.Pattern:
+    """ASCII 关键词的词边界匹配模式（避免 "go" 误匹配 "google"）。
+
+    使用 lookaround 而非 \\b，因为 \\b 对 "c++" 这种含非词字符的关键词不工作。
+    """
+    return re.compile(r"(?<![a-z0-9_])" + re.escape(kw) + r"(?![a-z0-9_])")
+
+
+def _count_keyword_matches(keywords: list[str], message_lower: str) -> int:
+    """匹配关键词数。ASCII 关键词用词边界，CJK 关键词用子串。"""
+    count = 0
+    for kw in keywords:
+        if kw.isascii():
+            if _ascii_kw_pattern(kw).search(message_lower):
+                count += 1
+        else:
+            if kw in message_lower:
+                count += 1
+    return count
+
+
 class ComplexityAnalyzer:
     """问题复杂度分析器"""
 
@@ -82,7 +106,7 @@ class ComplexityAnalyzer:
         # 关键词评分
         for category, keywords in _KEYWORD_PATTERNS.items():
             weight = self.weights.get(category, 0)
-            matched = sum(1 for kw in keywords if kw in message_lower)
+            matched = _count_keyword_matches(keywords, message_lower)
             category_score = matched * weight
             factors[category] = category_score
             score += category_score

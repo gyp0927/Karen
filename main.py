@@ -1,13 +1,15 @@
 import asyncio
 import logging
+import os
 
 from agents.nodes import create_agents
 from interface.human_interface import HumanInterface
 from state.manager import SessionManager
 
-# 配置控制台日志
+# 配置控制台日志（可通过环境变量 LOG_LEVEL 调整，默认 INFO）
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )

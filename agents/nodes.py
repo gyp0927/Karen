@@ -70,6 +70,10 @@ _GREETING_PATTERNS: dict[str, str] = {
 
 
 _GLOWING_GREETINGS: set[str] = set(_GREETING_PATTERNS.keys())
+# 按长度降序的 greeting 列表，前缀匹配时优先长串（"good morning" 先于 "good"）
+_GREETINGS_BY_LEN: list[str] = sorted(_GREETING_PATTERNS.keys(), key=len, reverse=True)
+# 问候后可能跟着的语气词/填充字符（中文 + 标点 + 空格）
+_GREETING_FILLERS = "啊呀呢嘛哦哇吧嗯呦唉哈喔嘞欸 ~～!?！？.。,，"
 
 
 def _quick_greeting(text: str) -> str | None:
@@ -84,6 +88,13 @@ def _quick_greeting(text: str) -> str | None:
     t2 = t.rstrip("~～ ")
     if t2 in _GLOWING_GREETINGS:
         return _GREETING_PATTERNS[t2]
+    # 前缀匹配：剩余部分仅为语气词/填充才视为同一问候
+    # 避免把"你好我想问个问题"误判成"你好"
+    for key in _GREETINGS_BY_LEN:
+        if t.startswith(key):
+            tail = t[len(key):].strip(_GREETING_FILLERS).strip()
+            if not tail:
+                return _GREETING_PATTERNS[key]
     return None
 
 

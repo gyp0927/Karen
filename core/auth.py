@@ -40,6 +40,25 @@ _AUTH_RATE_BLOCK = 300.0
 _auth_failures: dict[str, list[float]] = {}
 _auth_rate_lock = threading.RLock()
 
+# 字典清理：每记录 _AUTH_PURGE_EVERY 次失败做一次全局扫描，回收已过 BLOCK 窗口的 IP 条目，
+# 避免大量"打一枪就跑"的扫描 IP 把字典撑爆。同时设置硬上限作为最后兜底。
+_AUTH_PURGE_EVERY = 100
+_AUTH_MAX_ENTRIES = 10000
+_auth_purge_counter = 0
+
+
+def _purge_expired_failures(now: float) -> None:
+    """清理 _auth_failures 中所有已过 BLOCK 窗口的条目。调用方需持有 _auth_rate_lock。"""
+    expired = []
+    for ip, attempts in _auth_failures.items():
+        fresh = [t for t in attempts if now - t < _AUTH_RATE_BLOCK]
+        if fresh:
+            _auth_failures[ip] = fresh
+        else:
+            expired.append(ip)
+    for ip in expired:
+        _auth_failures.pop(ip, None)
+
 
 def _check_rate_limit(ip: str) -> bool:
     """True 表示允许尝试,False 表示限流中。空 ip 不限流(本地调用)。"""
@@ -57,11 +76,27 @@ def _check_rate_limit(ip: str) -> bool:
 
 
 def _record_auth_failure(ip: str) -> None:
+    global _auth_purge_counter
     if not ip:
         return
     now = time.time()
     with _auth_rate_lock:
         _auth_failures.setdefault(ip, []).append(now)
+        _auth_purge_counter += 1
+        if _auth_purge_counter >= _AUTH_PURGE_EVERY:
+            _auth_purge_counter = 0
+            _purge_expired_failures(now)
+        # 硬上限兜底：极端场景下短时间内涌入大量唯一 IP，清扫后仍超限则丢弃最老的
+        if len(_auth_failures) > _AUTH_MAX_ENTRIES:
+            _purge_expired_failures(now)
+            if len(_auth_failures) > _AUTH_MAX_ENTRIES:
+                overflow = len(_auth_failures) - _AUTH_MAX_ENTRIES
+                stalest = sorted(
+                    _auth_failures.items(),
+                    key=lambda kv: max(kv[1]) if kv[1] else 0,
+                )[:overflow]
+                for stale_ip, _ in stalest:
+                    _auth_failures.pop(stale_ip, None)
 
 
 def _get_conn() -> sqlite3.Connection:

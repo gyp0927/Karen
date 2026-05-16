@@ -97,6 +97,25 @@ class ResponseCache:
                 return True
         return False
 
+    # 时效性查询（短 TTL，避免过期信息留存太久）
+    _VOLATILE_KW = (
+        "天气", "气温", "股价", "新闻", "今天", "现在", "目前", "最新", "实时",
+        "weather", "stock", "news", "today", "yesterday", "latest", "current", "now",
+    )
+    # 时效性按比例缩短（默认 24h → 1h 左右）
+    _VOLATILE_TTL_FACTOR = 1 / 24
+
+    def _detect_ttl_factor(self, messages: list) -> float:
+        """根据消息内容推断 TTL 倍率。时效性查询用更短 TTL，其他维持默认。"""
+        for msg in messages:
+            content = getattr(msg, "content", "")
+            if not content:
+                continue
+            content_lower = content.lower()
+            if any(kw in content_lower for kw in self._VOLATILE_KW):
+                return self._VOLATILE_TTL_FACTOR
+        return 1.0
+
     def get(self, messages: list, provider: str, model: str) -> Optional[str]:
         """从缓存获取响应。"""
         if not self.enabled:
@@ -132,8 +151,11 @@ class ResponseCache:
                 return row["response"]
             return None
 
-    def set(self, messages: list, provider: str, model: str, response: str):
-        """将响应写入缓存。"""
+    def set(self, messages: list, provider: str, model: str, response: str, ttl_seconds: Optional[int] = None):
+        """将响应写入缓存。
+
+        ttl_seconds: 显式 TTL（秒），不传则按消息内容自动推断（时效性查询 TTL 更短）。
+        """
         if not self.enabled:
             return
         if self._should_skip_cache(messages):
@@ -143,7 +165,11 @@ class ResponseCache:
 
         key_hash = self._get_cache_key(messages, provider, model)
         now = time.time()
-        expires = now + self.ttl
+        if ttl_seconds is not None:
+            effective_ttl = ttl_seconds
+        else:
+            effective_ttl = self.ttl * self._detect_ttl_factor(messages)
+        expires = now + effective_ttl
 
         # 生成消息预览（前 100 字符）
         preview = ""

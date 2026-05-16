@@ -55,9 +55,10 @@ from web.state import (
 )
 from web.utils import _GENERATED_DIR, run_async_in_thread
 
-# 配置日志
+# 配置日志（可通过环境变量 LOG_LEVEL 调整，默认 INFO）
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -290,13 +291,32 @@ def _get_real_remote_addr():
     return request.remote_addr
 
 
+def _is_local_address(remote: str) -> bool:
+    """判断地址是否本机。覆盖 IPv4、IPv6 loopback，以及 IPv4-mapped IPv6（如 ::ffff:127.0.0.1）。"""
+    if not remote:
+        return False
+    if remote == "localhost":
+        return True
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(remote)
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return True
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None and mapped.is_loopback:
+        return True
+    return False
+
+
 @app.before_request
 def restrict_local_only():
     path = request.path
     for prefix in LOCAL_ONLY_PREFIXES:
         if path.startswith(prefix):
             remote = _get_real_remote_addr()
-            if remote not in ("127.0.0.1", "::1", "localhost"):
+            if not _is_local_address(remote):
                 return "Access denied: configuration is local only", 403
 
 

@@ -19,7 +19,7 @@ async def _safe_search(
     search_fn: Callable,
     label: str,
     *args,
-    success_check: Callable = None,
+    success_check: Callable | None = None,
     **kwargs,
 ) -> str:
     """通用搜索包装器——统一异常处理和结果格式化。
