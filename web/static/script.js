@@ -564,13 +564,35 @@ if (fileAttachmentRemove) {
 
 // ============ Session Management ============
 
+let _lastSessionHash = "";
+
+function _sessionHash(sessions) {
+  // 轻量哈希：只比较 id + title + is_current，忽略不影响渲染的字段
+  let h = 0;
+  for (let i = 0; i < sessions.length; i++) {
+    const s = sessions[i];
+    const str = s.id + s.title + (s.is_current ? "1" : "0");
+    for (let j = 0; j < str.length; j++) {
+      h = ((h << 5) - h + str.charCodeAt(j)) | 0;
+    }
+  }
+  return h.toString(36);
+}
+
 function renderSessionList() {
   if (!sidebarHistory) return;
 
   if (sessions.length === 0) {
-    sidebarHistory.innerHTML = "";
+    if (_lastSessionHash !== "") {
+      _lastSessionHash = "";
+      sidebarHistory.innerHTML = "";
+    }
     return;
   }
+
+  const hash = _sessionHash(sessions);
+  if (hash === _lastSessionHash) return; // 无变化，跳过重绘
+  _lastSessionHash = hash;
 
   sidebarHistory.innerHTML = sessions.map(s => `
     <div class="history-item ${s.is_current ? 'active' : ''}" data-session-id="${escapeHtml(s.id)}">

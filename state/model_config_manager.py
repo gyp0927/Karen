@@ -1,10 +1,16 @@
 import json
 import os
+import threading
 import uuid
 from datetime import datetime
 
 _CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state")
 _CONFIG_FILE = os.path.join(_CONFIG_DIR, "model_configs.json")
+
+# 内存缓存：避免每次读配置都打开文件
+_cache_lock = threading.Lock()
+_cache_data: dict | None = None
+_cache_mtime: float = 0.0
 
 
 def _ensure_file():
@@ -14,20 +20,39 @@ def _ensure_file():
 
 
 def _load_data() -> dict:
-    """加载配置数据"""
+    """加载配置数据（带内存缓存，文件未变更时直接返回缓存）"""
+    global _cache_data, _cache_mtime
     _ensure_file()
     try:
+        mtime = os.path.getmtime(_CONFIG_FILE)
+    except OSError:
+        mtime = 0.0
+    with _cache_lock:
+        if _cache_data is not None and mtime == _cache_mtime:
+            return _cache_data
+    try:
         with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (json.JSONDecodeError, FileNotFoundError):
-        return {"configs": [], "activeConfigId": None}
+        data = {"configs": [], "activeConfigId": None}
+    with _cache_lock:
+        _cache_data = data
+        _cache_mtime = mtime
+    return data
 
 
 def _save_data(data: dict):
-    """保存配置数据"""
+    """保存配置数据（更新文件同时刷新内存缓存）"""
+    global _cache_data, _cache_mtime
     os.makedirs(_CONFIG_DIR, exist_ok=True)
     with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    with _cache_lock:
+        _cache_data = data
+        try:
+            _cache_mtime = os.path.getmtime(_CONFIG_FILE)
+        except OSError:
+            _cache_mtime = 0.0
 
 
 def list_configs() -> list[dict]:

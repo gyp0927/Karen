@@ -71,18 +71,21 @@ class ResponseCache:
     _MAX_MSG_HASH_LEN = 500
 
     def _get_cache_key(self, messages: list, provider: str, model: str) -> str:
-        """生成缓存键（SHA256 哈希）。"""
+        """生成缓存键（blake2b 哈希，比 SHA256 更快）。"""
         max_len = self._MAX_MSG_HASH_LEN
-        content_parts = []
+        parts = [provider, ":", model, ":"]
         for msg in messages:
             if hasattr(msg, "content"):
                 content = msg.content[:max_len] if msg.content else ""
-                content_parts.append(f"{getattr(msg, 'type', 'unknown')}:{content}")
+                parts.append(getattr(msg, "type", "unknown"))
+                parts.append(":")
+                parts.append(content)
+                parts.append("\n")
             else:
-                content_parts.append(str(msg)[:max_len])
-        content_str = "\n".join(content_parts)
-        raw_key = f"{provider}:{model}:{content_str}"
-        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+                parts.append(str(msg)[:max_len])
+                parts.append("\n")
+        raw_key = "".join(parts)
+        return hashlib.blake2b(raw_key.encode("utf-8"), digest_size=32).hexdigest()
 
     def _should_skip_cache(self, messages: list) -> bool:
         """判断是否应该跳过缓存。"""

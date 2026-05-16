@@ -63,31 +63,37 @@ class IntentResult:
 
 # ========== 第一层：规则引擎 ==========
 
+# ========== 预编译正则（模块加载时一次性编译，避免每次分类重复编译） ==========
+
+def _compile_patterns(patterns: list[str]) -> list[re.Pattern]:
+    """预编译正则模式列表。"""
+    return [re.compile(p) for p in patterns]
+
 # 问候语（中英文）
-_GREETING_PATTERNS = [
+_GREETING_PATTERNS = _compile_patterns([
     r"^\s*(你?好|您好|嗨|hello|hi|hey)\s*[!.！。]?\s*$",
     r"^\s*(早上好|下午好|晚上好|早安|晚安)\s*[!.！。]?\s*$",
     r"^\s*(在吗|在嘛|在?|有人吗)\s*[?？]?\s*$",
-]
+])
 
 # 告别语
-_FAREWELL_PATTERNS = [
+_FAREWELL_PATTERNS = _compile_patterns([
     r"^\s*(再见|拜拜|bye|goodbye|see you|下次见)\s*[!.！。]?\s*$",
-]
+])
 
 # 感谢
-_THANKS_PATTERNS = [
+_THANKS_PATTERNS = _compile_patterns([
     r"^\s*(谢谢|感谢|thx|thanks|thank you|谢了|多谢)\s*[!.！。]?\s*$",
-]
+])
 
 # 数学表达式（简单判断）
-_MATH_PATTERNS = [
+_MATH_PATTERNS = _compile_patterns([
     r"[\d\s]+[+\-*/^=]+[\d\s+xX]+",           # 2+2, x^2+3
     r"^\s*计算\s*[:：]?\s*",                     # 计算：...
     r"^\s*等于多少\s*[?？]?\s*$",               # ...等于多少
     r"[\d\s]+的\s*[\d\s]+次方",                 # 2的10次方
     r"[\d\s]+[倍%％分之和差积商]",               # 百分比、倍数
-]
+])
 
 # 代码请求
 _CODING_KEYWORDS = [
@@ -130,20 +136,20 @@ _FACTUAL_KEYWORDS = [
 ]
 
 # 闲聊
-_CHITCHAT_PATTERNS = [
+_CHITCHAT_PATTERNS = _compile_patterns([
     r"^\s*(嗯|哦|啊|哈哈|呵呵|嘿嘿)\s*$",
     r"^\s*(好的|ok|可以|行|没问题)\s*[!.！。]?\s*$",
     r"^\s*(真的吗|是吗|不会吧|太棒了|厉害了)\s*[?？!.！。]?\s*$",
-]
+])
 
 # 澄清/追问
-_CLARIFY_PATTERNS = [
+_CLARIFY_PATTERNS = _compile_patterns([
     r"^\s*(详细说说|详细点|再详细|展开讲讲|具体说说)\s*$",
     r"^\s*(举个例子|举例说明|比如呢|例如)\s*[?？]?\s*$",
     r"^\s*(然后呢|还有呢|接着说|继续说)\s*[?？]?\s*$",
     r"^\s*(为什么|怎么回事|什么意思|怎么理解)\s*[?？]?\s*$",
     r"^\s*(那.*呢|还有.*吗|.*怎么样)\s*[?？]?\s*$",
-]
+])
 
 
 def _match_patterns(text: str, patterns: list[str]) -> bool:
