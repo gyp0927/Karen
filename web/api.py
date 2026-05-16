@@ -24,7 +24,7 @@ def _get_generated_dir():
     return _GENERATED_DIR
 
 from core.auth import (
-    auth_required, AUTH_ENABLED, create_user, authenticate,
+    auth_required, admin_required, AUTH_ENABLED, create_user, authenticate,
     get_user_by_id, list_users, delete_user, update_user_config,
 )
 from core.config import PROVIDER_NAMES, BASE_URLS
@@ -59,6 +59,12 @@ def knowledge_page():
 @api_bp.route("/plugins")
 def plugins_page():
     return render_template("plugins.html")
+
+
+@api_bp.route("/users")
+@admin_required
+def users_page():
+    return render_template("users.html")
 
 
 @api_bp.route("/api/upload", methods=["POST"])
@@ -928,11 +934,12 @@ def register_api():
         data = request.get_json() or {}
         name = data.get("name", "").strip()
         api_key = data.get("apiKey", "").strip()
+        role = data.get("role", "user").strip()
         if not name:
             return {"success": False, "message": "请填写用户名"}, 400
         if not api_key:
             return {"success": False, "message": "请提供 API Key"}, 400
-        user = create_user(name, api_key)
+        user = create_user(name, api_key, role=role)
         return {"success": True, "user": user.to_dict()}
     except ValueError as e:
         return {"success": False, "message": str(e)}, 400
