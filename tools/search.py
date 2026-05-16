@@ -25,7 +25,7 @@ _MAX_FETCH_WORKERS = 3
 _MAX_RETRIES = 2
 
 # 快速模式专用超时（ aggressive —— 快速模式追求速度而非 completeness ）
-_FAST_SEARCH_TIMEOUT = 3
+_FAST_SEARCH_TIMEOUT = 2
 _FAST_FETCH_TIMEOUT = 3
 _FAST_MAX_RETRIES = 1
 _FAST_MAX_FETCH_WORKERS = 2

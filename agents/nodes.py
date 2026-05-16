@@ -519,7 +519,7 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
         try:
             search_context = await asyncio.wait_for(
                 run_parallel_search(state),
-                timeout=3.0,
+                timeout=2.0,
             )
             if search_context:
                 search_msg = SystemMessage(
@@ -534,7 +534,7 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
                 state = dict(state)
                 state["messages"] = list(state.get("messages", [])) + [search_msg]
         except asyncio.TimeoutError:
-            logger.info("[responder] Search timeout (3.0s), proceeding with knowledge")
+            logger.info("[responder] Search timeout (2.0s), proceeding with knowledge")
         except Exception as e:
             logger.warning(f"[responder] Search failed: {e}")
 
