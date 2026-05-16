@@ -113,7 +113,7 @@ def _record_auth_failure(ip: str) -> None:
 
 def _get_conn() -> sqlite3.Connection:
     from core.db_utils import get_sqlite_conn
-    return get_sqlite_conn(_DB_PATH, enable_wal=False)
+    return get_sqlite_conn(_DB_PATH, enable_wal=False, use_thread_local=True)
 
 
 def init_auth_db():
