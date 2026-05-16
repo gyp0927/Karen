@@ -12,26 +12,28 @@ from langchain_openai import ChatOpenAI
 logger = logging.getLogger(__name__)
 
 # ========== HTTP 客户端 ==========
-# httpx.AsyncClient 绑定在第一次使用它的 event loop 上,跨 loop 复用会
-# 抛 "Event loop is closed"。Flask-SocketIO threading 模式下,每次请求
-# 都新建 loop,所以必须按 loop id 隔离 client。
+# httpx.AsyncClient 绑定在创建它的 event loop 上。Flask-SocketIO threading
+# 模式下线程池中的线程可能销毁重建，导致 loop id 被重用。用
+# (thread_id, loop_id) 组合键降低碰撞概率，同时定期清理不再活跃的条目。
 
-_httpx_clients: "OrderedDict[int, object]" = OrderedDict()
+_httpx_clients: "OrderedDict[tuple[int, int], object]" = OrderedDict()
 _httpx_lock = threading.Lock()
-_HTTPX_MAX_LOOPS = 8
+_HTTPX_MAX_CLIENTS = 8
 
 
 def _get_http_async_client():
-    """获取与当前 event loop 绑定的 httpx.AsyncClient。"""
+    """获取与当前线程+event loop 绑定的 httpx.AsyncClient。"""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return None
+    thread_id = threading.current_thread().ident
     loop_id = id(loop)
+    key = (thread_id, loop_id)
     with _httpx_lock:
-        client = _httpx_clients.get(loop_id)
+        client = _httpx_clients.get(key)
         if client is not None:
-            _httpx_clients.move_to_end(loop_id)
+            _httpx_clients.move_to_end(key)
             return client
         try:
             import httpx
@@ -46,20 +48,29 @@ def _get_http_async_client():
         except ImportError:
             logger.warning("httpx not installed, falling back to default HTTP client")
             return None
-        _httpx_clients[loop_id] = client
-        if len(_httpx_clients) > _HTTPX_MAX_LOOPS:
+        _httpx_clients[key] = client
+        if len(_httpx_clients) > _HTTPX_MAX_CLIENTS:
             _, old_client = _httpx_clients.popitem(last=False)
-
-            def _close_client(client):
-                loop = asyncio.new_event_loop()
-                try:
-                    loop.run_until_complete(client.aclose())
-                finally:
-                    loop.close()
-
-            threading.Thread(target=_close_client, args=(old_client,), daemon=True).start()
-        logger.debug(f"Async HTTP client created for loop {loop_id}")
+            _spawn_bg(_close_httpx_client, old_client)
+        logger.debug(f"Async HTTP client created for thread={thread_id}, loop={loop_id}")
         return client
+
+
+def _close_httpx_client(client):
+    """在独立 loop 中安全关闭 httpx client。"""
+    try:
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(client.aclose())
+        finally:
+            loop.close()
+    except Exception:
+        pass
+
+
+def _spawn_bg(fn, *args, **kwargs):
+    """后台 daemon 线程执行同步函数。"""
+    threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
 
 
 # ========== LLM 配置隔离 ==========

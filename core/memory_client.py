@@ -50,19 +50,166 @@ except Exception as _e:  # pragma: no cover
     logger.debug(f"Memory system import failed: {_e}")
 
 # ---------------------------------------------------------------------------
+# SQLite fallback memory store (当完整记忆系统依赖缺失时降级使用)
+# ---------------------------------------------------------------------------
+import sqlite3 as _sqlite3
+import uuid as _uuid
+import time as _time
+
+
+class _SQLiteMemoryFallback:
+    """纯 SQLite 记忆降级存储。无向量检索，仅做文本子串匹配。
+
+    接口与 AgentMemoryStore 保持一致，便于调用方无感知切换。
+    """
+
+    _DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "memories_fallback.db")
+    _INIT_SQL = """
+        CREATE TABLE IF NOT EXISTS memories (
+            memory_id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            memory_type TEXT DEFAULT 'observation',
+            source TEXT DEFAULT '',
+            importance REAL DEFAULT 0.5,
+            tags TEXT DEFAULT '[]',
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memories_content ON memories(content);
+        CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source);
+    """
+
+    def __init__(self) -> None:
+        os.makedirs(os.path.dirname(self._DB_PATH), exist_ok=True)
+        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+        conn.executescript(self._INIT_SQL)
+        conn.close()
+        self._initialized = True
+
+    def is_initialized(self) -> bool:
+        return self._initialized
+
+    async def initialize(self) -> None:
+        pass
+
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        user_id: str = "",
+        source: str = "",
+    ) -> list[dict[str, Any]]:
+        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+        conn.row_factory = _sqlite3.Row
+        try:
+            # 简单文本匹配：关键词拆成 LIKE 子句
+            words = [w for w in query.split() if len(w) >= 2]
+            if not words:
+                words = [query]
+            sql = "SELECT * FROM memories WHERE 1=1"
+            params: list[Any] = []
+            if source:
+                sql += " AND source = ?"
+                params.append(source)
+            for w in words:
+                sql += " AND content LIKE ?"
+                params.append(f"%{w}%")
+            sql += " ORDER BY importance DESC, created_at DESC LIMIT ?"
+            params.append(top_k)
+            rows = conn.execute(sql, params).fetchall()
+            return [
+                {
+                    "memory_id": row["memory_id"],
+                    "content": row["content"],
+                    "score": 0.5,
+                    "tier": "cold",
+                    "memory_type": row["memory_type"],
+                    "frequency_score": 0.0,
+                }
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    async def save_memory(
+        self,
+        content: str,
+        memory_type: str = "observation",
+        source: str = "",
+        importance: float = 0.5,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+        try:
+            mid = str(_uuid.uuid4())
+            conn.execute(
+                "INSERT INTO memories (memory_id, content, memory_type, source, importance, tags, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (mid, content, memory_type, source, importance, json.dumps(tags or []), _time.time()),
+            )
+            conn.commit()
+            return {"memory_id": mid, "status": "created", "tier": "cold"}
+        finally:
+            conn.close()
+
+    async def save_memories_batch(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [await self.save_memory(**item) for item in items]
+
+    async def delete_session_memories(self, session_id: str) -> int:
+        if not session_id:
+            return 0
+        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+        try:
+            cursor = conn.execute("DELETE FROM memories WHERE source = ?", (session_id,))
+            conn.commit()
+            return cursor.rowcount
+        finally:
+            conn.close()
+
+    @staticmethod
+    def format_memories_for_prompt(memories: list[dict[str, Any]]) -> str:
+        if not memories:
+            return ""
+        lines = ["[相关记忆 / Relevant Memories]"]
+        for i, mem in enumerate(memories, 1):
+            tier_tag = f"[{mem['tier']}]" if mem.get("tier") else ""
+            lines.append(f"{i}. {mem['content']} {tier_tag}".strip())
+        return "\n".join(lines)
+
+    def get_stats(self) -> dict[str, Any]:
+        conn = _sqlite3.connect(self._DB_PATH, check_same_thread=False)
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+            return {"initialized": True, "backend": "sqlite_fallback", "total_memories": total}
+        finally:
+            conn.close()
+
+    async def shutdown(self) -> None:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Singleton storage – one global store per process
 # ---------------------------------------------------------------------------
 _store_instance: AgentMemoryStore | None = None
 _store_lock = threading.Lock()
 
 
-def get_memory_store() -> AgentMemoryStore:
-    """Return the global memory store singleton."""
+def get_memory_store():
+    """Return the global memory store singleton.
+
+    当完整记忆系统依赖缺失时，自动降级到 SQLite fallback。
+    """
     global _store_instance
     if _store_instance is None:
         with _store_lock:
             if _store_instance is None:
-                _store_instance = AgentMemoryStore()
+                if _MEMORY_SYSTEM_AVAILABLE:
+                    _store_instance = AgentMemoryStore()
+                else:
+                    logger.warning(
+                        "Memory system dependencies missing, falling back to SQLite. "
+                        f"Import error: {_import_err}"
+                    )
+                    _store_instance = _SQLiteMemoryFallback()
     return _store_instance
 
 

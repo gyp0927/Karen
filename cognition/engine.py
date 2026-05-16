@@ -47,13 +47,13 @@ class EmotionalStateManager:
         with self._lock:
             if key not in self._states:
                 # 防止无限制增长：超出上限时清理最久未访问的条目 (LRU)
-                if len(self._states) >= self._MAX_STATES:
-                    # 按访问时间排序，移除最旧的 25%
+                # LRU 清理：超出上限时持续移除最旧条目，直到降到 75% 上限以下
+                while len(self._states) >= self._MAX_STATES:
                     sorted_keys = sorted(self._access_times, key=self._access_times.get)
                     to_remove = sorted_keys[:max(1, len(sorted_keys) // 4)]
                     for k in to_remove:
-                        del self._states[k]
-                        del self._access_times[k]
+                        self._states.pop(k, None)
+                        self._access_times.pop(k, None)
                 self._states[key] = EmotionalState()
             self._access_times[key] = time.time()
             return self._states[key]
@@ -264,10 +264,11 @@ class IntuitionEngine:
 
         self._experience_cache[cache_key] = result
         self._cache_times[cache_key] = now
-        if len(self._experience_cache) > self._CACHE_MAX_SIZE:
-            # 清理最旧的 50%，避免一次性全部清空导致缓存雪崩
+        # LRU 清理：持续移除最旧条目直到降到上限以下
+        while len(self._experience_cache) > self._CACHE_MAX_SIZE:
             sorted_keys = sorted(self._cache_times, key=self._cache_times.get)
-            for k in sorted_keys[:len(sorted_keys) // 2]:
+            to_remove = sorted_keys[:max(1, len(sorted_keys) // 4)]
+            for k in to_remove:
                 self._experience_cache.pop(k, None)
                 self._cache_times.pop(k, None)
         return result

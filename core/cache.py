@@ -237,21 +237,25 @@ class ResponseCache:
 
 # 全局缓存实例
 _cache_instance: Optional[ResponseCache] = None
+_cache_singleton_lock = threading.Lock()
 
 
 def get_cache() -> ResponseCache:
-    """获取全局缓存实例。"""
+    """获取全局缓存实例（线程安全）。"""
     global _cache_instance
     if _cache_instance is None:
-        _cache_instance = ResponseCache()
+        with _cache_singleton_lock:
+            if _cache_instance is None:
+                _cache_instance = ResponseCache()
     return _cache_instance
 
 
 def configure_cache(enabled: bool = True, ttl_hours: int = 24):
-    """配置缓存参数。"""
+    """配置缓存参数（线程安全）。"""
     global _cache_instance
-    _cache_instance = ResponseCache(
-        ttl_seconds=ttl_hours * 3600,
-        enabled=enabled
-    )
+    with _cache_singleton_lock:
+        _cache_instance = ResponseCache(
+            ttl_seconds=ttl_hours * 3600,
+            enabled=enabled
+        )
     logger.info(f"Cache configured: enabled={enabled}, ttl={ttl_hours}h")

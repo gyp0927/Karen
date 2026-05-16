@@ -31,7 +31,25 @@ logger = logging.getLogger(__name__)
 # LLM 并发控制:同时最多 N 个流式请求,防止突发流量打满连接池或触发 API 限流。
 # 值过大 → API 限流/连接池耗尽;值过小 → 高并发时排队。
 # 当前连接池 max_connections=100,keepalive=20,设 8-12 比较安全。
-_LLM_CONCURRENCY_SEM = asyncio.Semaphore(8)
+# 按 event loop 隔离 Semaphore，避免 threading 模式下跨 loop 使用导致异常。
+_LLM_SEM_LIMIT = 8
+_llm_semaphores: dict[int, asyncio.Semaphore] = {}
+
+
+def _get_llm_sem() -> asyncio.Semaphore:
+    """获取绑定到当前 event loop 的并发 Semaphore。"""
+    loop = asyncio.get_running_loop()
+    loop_id = id(loop)
+    sem = _llm_semaphores.get(loop_id)
+    if sem is None:
+        sem = asyncio.Semaphore(_LLM_SEM_LIMIT)
+        _llm_semaphores[loop_id] = sem
+        # 防止 dict 无限增长：loop 被 GC 后 id 可能重用，数量通常很少，
+        # 极端场景下（线程池频繁回收）做上限兜底
+        if len(_llm_semaphores) > 64:
+            _llm_semaphores.clear()
+            _llm_semaphores[loop_id] = sem
+    return sem
 
 
 # 单条 LLM 流式响应超时（秒）。超时后返回已收到的 partial response。
@@ -394,7 +412,7 @@ async def _run_agent(
         return cached_result
 
     # ---- Phase 6: LLM 调用 ----
-    async with _LLM_CONCURRENCY_SEM:
+    async with _get_llm_sem():
         llm = get_llm(sid or "")
         llm = _bind_llm_params(llm, agent_name, provider)
         _llm_t0 = time.time()

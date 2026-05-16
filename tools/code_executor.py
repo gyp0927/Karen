@@ -106,6 +106,23 @@ def _check_ast(code: str) -> bool:
             if node.attr in _FORBIDDEN_ATTRS:
                 raise SecurityError(f"禁止访问 dunder 属性: .{node.attr}")
 
+        # 禁止 lambda（可绕过函数名检查构造逃逸链）
+        if isinstance(node, ast.Lambda):
+            raise SecurityError("禁止 lambda 表达式")
+
+        # 禁止推导式（内部表达式可构造逃逸链，且难以逐层审查）
+        if isinstance(node, (ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp)):
+            raise SecurityError("禁止列表/字典/集合推导式与生成器表达式")
+
+        # 禁止通过 Subscript 访问危险属性（如 __builtins__['__import__']）
+        if isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name):
+                if node.value.id in ("__builtins__", "builtins", "__import__"):
+                    raise SecurityError(f"禁止通过下标访问: {node.value.id}[...]")
+            if isinstance(node.value, ast.Attribute):
+                if node.value.attr in _FORBIDDEN_ATTRS:
+                    raise SecurityError(f"禁止通过下标访问 dunder 属性: .{node.value.attr}[...]")
+
     return True
 
 
