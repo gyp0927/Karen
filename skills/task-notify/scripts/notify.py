@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Windows 桌面通知脚本 — 在桌面右下角弹出通知气泡。
+Windows 桌面通知脚本 — 使用原生 Toast Notification，美观现代，来源显示 Claude。
 
 用法:
     python notify.py --title "Claude" --message "任务已完成" --duration 5
@@ -8,42 +8,42 @@ Windows 桌面通知脚本 — 在桌面右下角弹出通知气泡。
 """
 
 import argparse
-import subprocess
 import sys
+from pathlib import Path
+
+def get_icon_path() -> str | None:
+    """获取 Claude 图标路径。"""
+    script_dir = Path(__file__).parent
+    icon_file = script_dir.parent / "assets" / "claude_icon.png"
+    if icon_file.exists():
+        return f"file:///{icon_file.absolute().as_posix()}"
+    return None
 
 
 def show_notification(title: str, message: str, duration: int = 5) -> None:
-    """在 Windows 桌面右下角显示通知气泡。
+    """使用 Windows Toast Notification 显示通知。
 
-    Args:
-        title: 通知标题
-        message: 通知正文内容
-        duration: 显示时长（秒），默认 5 秒
+    通知来源显示为 "Claude"，并使用 Claude 品牌图标。
     """
-    ps_script = f'''
-    Add-Type -AssemblyName System.Windows.Forms
-    $balloon = New-Object System.Windows.Forms.NotifyIcon
-    $balloon.Icon = [System.Drawing.SystemIcons]::Information
-    $balloon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-    $balloon.BalloonTipTitle = "{title.replace('"', '`"')}"
-    $balloon.BalloonTipText = "{message.replace('"', '`"').replace(chr(10), ' ')}"
-    $balloon.Visible = $true
-    $balloon.ShowBalloonTip({duration * 1000})
-    Start-Sleep -Milliseconds ({duration * 1000 + 500})
-    $balloon.Dispose()
-    '''
+    try:
+        from win11toast import toast
+    except ImportError:
+        print("错误：未安装 win11toast。请运行: pip install win11toast", file=sys.stderr)
+        sys.exit(1)
+
+    duration_str = "long" if duration >= 7 else "short"
+    icon = get_icon_path()
 
     try:
-        subprocess.run(
-            ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script],
-            check=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        toast(
+            title=title,
+            body=message,
+            app_id="Claude",
+            icon=icon,
+            duration=duration_str,
         )
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         print(f"通知发送失败: {e}", file=sys.stderr)
-        sys.exit(1)
-    except FileNotFoundError:
-        print("错误：未找到 PowerShell。此脚本仅支持 Windows 系统。", file=sys.stderr)
         sys.exit(1)
 
 

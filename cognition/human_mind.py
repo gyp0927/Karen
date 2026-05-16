@@ -20,17 +20,36 @@ from typing import Optional
 from langchain_core.messages import AIMessage
 
 from cognition.types import CognitiveState, ThinkingMode
-from cognition.engine import (
-    get_monologue_engine,
-    wrap_prompt_with_monologue,
-    get_emotional_manager,
-    inject_emotion_to_prompt,
-    get_intuition_engine,
-    get_metacognition_engine,
-    get_persona_manager,
-)
 
 logger = logging.getLogger(__name__)
+
+# cognition.engine 内部依赖（如 anyio、ordered-set 等）可能缺失，
+# 导入失败时降级为 pass-through，避免整个系统起不来。
+_engine_available = True
+try:
+    from cognition.engine import (
+        get_monologue_engine,
+        wrap_prompt_with_monologue,
+        get_emotional_manager,
+        inject_emotion_to_prompt,
+        get_intuition_engine,
+        get_metacognition_engine,
+        get_persona_manager,
+    )
+except Exception as _e:
+    _engine_available = False
+    logger.warning(f"Cognition engine import failed, falling back to pass-through: {_e}")
+
+    def _noop(*args, **kwargs):
+        pass
+
+    get_monologue_engine = _noop
+    wrap_prompt_with_monologue = lambda *a, **k: (a[1] if len(a) > 1 else "", False)
+    get_emotional_manager = _noop
+    inject_emotion_to_prompt = lambda *a, **k: a[1] if len(a) > 1 else ""
+    get_intuition_engine = _noop
+    get_metacognition_engine = _noop
+    get_persona_manager = _noop
 
 
 class HumanMind:

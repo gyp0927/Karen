@@ -107,27 +107,51 @@ class Embedder:
             self._openai_client = openai.AsyncOpenAI(api_key=api_key)
         return self._openai_client
 
-    def _get_local_model(self) -> Any:
-        """Lazy initialize sentence-transformers model."""
-        if self._local_model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-            except ImportError:
-                raise IngestionError(
-                    "sentence-transformers not installed. "
-                    "Run: pip install sentence-transformers"
-                )
+    async def _get_local_model(self) -> Any:
+        """Lazy initialize sentence-transformers model (async-safe with timeout)."""
+        if self._local_model is not None:
+            return self._local_model
 
-            logger.info(
-                "loading_local_embedding_model",
-                model=self.settings.LOCAL_EMBEDDING_MODEL,
-                device=self.settings.LOCAL_EMBEDDING_DEVICE,
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise IngestionError(
+                "sentence-transformers not installed. "
+                "Run: pip install sentence-transformers"
             )
-            self._local_model = SentenceTransformer(
+
+        logger.info(
+            "loading_local_embedding_model",
+            model=self.settings.LOCAL_EMBEDDING_MODEL,
+            device=self.settings.LOCAL_EMBEDDING_DEVICE,
+        )
+
+        # 模型首次下载可能卡死（网络/ huggingface 连接），加 120s 超时
+        _MODEL_LOAD_TIMEOUT = 120.0
+
+        def _load():
+            return SentenceTransformer(
                 self.settings.LOCAL_EMBEDDING_MODEL,
                 device=self.settings.LOCAL_EMBEDDING_DEVICE,
             )
-            logger.info("local_embedding_model_loaded")
+
+        try:
+            self._local_model = await asyncio.wait_for(
+                asyncio.to_thread(_load),
+                timeout=_MODEL_LOAD_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "local_embedding_model_load_timeout",
+                timeout=_MODEL_LOAD_TIMEOUT,
+                model=self.settings.LOCAL_EMBEDDING_MODEL,
+            )
+            raise IngestionError(
+                f"Embedding model load timed out (> {_MODEL_LOAD_TIMEOUT}s). "
+                "Check network connection to HuggingFace or set EMBEDDING_PROVIDER=openai."
+            )
+
+        logger.info("local_embedding_model_loaded")
         return self._local_model
 
     async def embed(self, text: str) -> list[float]:
@@ -250,14 +274,14 @@ class Embedder:
 
     async def _embed_local(self, text: str) -> list[float]:
         """Embed using local sentence-transformers model."""
-        model = self._get_local_model()
+        model = await self._get_local_model()
         # Run in thread pool to avoid blocking event loop
         embedding = await asyncio.to_thread(model.encode, text)
         return embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
 
     async def _embed_batch_local(self, texts: list[str]) -> list[list[float]]:
         """Embed batch using local sentence-transformers model."""
-        model = self._get_local_model()
+        model = await self._get_local_model()
         # Run in thread pool to avoid blocking event loop
         embeddings = await asyncio.to_thread(model.encode, texts)
         # Convert numpy arrays to lists
