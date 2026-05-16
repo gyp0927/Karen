@@ -51,9 +51,10 @@ from web.state import (
     SocketState, socket_states, _socket_states_lock,
     socket_configs, _socket_configs_lock,
     get_socket_state, cleanup_socket,
-    start_socket_cleanup, init_agents, fast_graph,
+    start_socket_cleanup, init_agents,
     has_socket_config, has_valid_config,
 )
+import web.state as _web_state
 from web.utils import _GENERATED_DIR, run_async_in_thread
 
 # 配置日志（可通过环境变量 LOG_LEVEL 调整，默认 INFO）
@@ -601,7 +602,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     }
 
     # 始终使用快速模式图
-    graph = fast_graph
+    graph = _web_state.fast_graph
 
     # 安全 emit：后台线程中请求上下文可能丢失，使用 socketio.emit 代替
     def _safe_emit(event, data):

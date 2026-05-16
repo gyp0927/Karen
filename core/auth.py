@@ -251,7 +251,7 @@ def authenticate(api_key: str, ip: str = "") -> Optional[User]:
                     row["id"],
                     row["name"],
                     json.loads(row["config_json"] or "{}"),
-                    row.get("role", "user"),
+                    row["role"] or "user",
                 )
             else:
                 user = None
@@ -286,12 +286,12 @@ def authenticate_password(name: str, password: str, ip: str = "") -> Optional[Us
                 (name,)
             )
             row = cursor.fetchone()
-            if row and row.get("password_hash") and _check_password(password, row["password_hash"]):
+            if row and row["password_hash"] and _check_password(password, row["password_hash"]):
                 user = User(
                     row["id"],
                     row["name"],
                     json.loads(row["config_json"] or "{}"),
-                    row.get("role", "user"),
+                    row["role"] or "user",
                 )
             else:
                 user = None
@@ -321,7 +321,7 @@ def get_user_by_id(user_id: str) -> Optional[User]:
                     row["id"],
                     row["name"],
                     json.loads(row["config_json"] or "{}"),
-                    row.get("role", "user"),
+                    row["role"] or "user",
                 )
             return None
         finally:
@@ -340,7 +340,7 @@ def list_users() -> list[dict]:
                 {
                     "id": row["id"],
                     "name": row["name"],
-                    "role": row.get("role", "user"),
+                    "role": row["role"] or "user",
                     "created_at": row["created_at"],
                 }
                 for row in cursor.fetchall()
