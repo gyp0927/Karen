@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import threading
 import time
@@ -119,6 +120,12 @@ def init_auth_db():
                 );
                 CREATE INDEX IF NOT EXISTS idx_users_key ON users(api_key_hash);
             """)
+            # 迁移：添加 role / key_salt 列（兼容旧数据库）
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "role" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
+            if "key_salt" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN key_salt TEXT DEFAULT ''")
             conn.commit()
         finally:
             conn.close()
@@ -127,39 +134,48 @@ def init_auth_db():
 class User:
     """用户对象"""
 
-    def __init__(self, user_id: str, name: str, config: dict = None):
+    def __init__(self, user_id: str, name: str, config: dict = None, role: str = "user"):
         self.id = user_id
         self.name = name
         self.config = config or {}
+        self.role = role
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
             "name": self.name,
             "config": self.config,
+            "role": self.role,
         }
 
 
-def _hash_key(api_key: str) -> str:
-    """对 API Key 进行哈希（用于存储和查找）。"""
+def _derive_key(api_key: str, salt: bytes) -> str:
+    """PBKDF2-HMAC-SHA256 派生密钥（100k 轮次）。"""
+    return hashlib.pbkdf2_hmac("sha256", api_key.encode("utf-8"), salt, 100000).hex()
+
+
+def _legacy_hash(api_key: str) -> str:
+    """旧版纯 SHA256 哈希（用于兼容无 salt 的历史数据）。"""
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
-def create_user(name: str, api_key: str, config: dict = None) -> User:
+def create_user(name: str, api_key: str, config: dict = None, role: str = "user") -> User:
     """创建新用户。"""
     with _lock:
         conn = _get_conn()
         try:
             user_id = str(uuid.uuid4())[:8]
-            key_hash = _hash_key(api_key)
+            salt_bytes = secrets.token_bytes(16)
+            key_hash = _derive_key(api_key, salt_bytes)
+            key_salt = salt_bytes.hex()
             now = time.time()
             conn.execute(
-                "INSERT INTO users (id, name, api_key_hash, config_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (user_id, name, key_hash, json.dumps(config or {}), now)
+                "INSERT INTO users (id, name, api_key_hash, key_salt, config_json, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, name, key_hash, key_salt, json.dumps(config or {}), role, now)
             )
             conn.commit()
-            logger.info(f"Created user: {user_id} ({name})")
-            return User(user_id, name, config)
+            logger.info(f"Created user: {user_id} ({name}) role={role}")
+            return User(user_id, name, config, role)
         except sqlite3.IntegrityError:
             raise ValueError("API Key 已被使用")
         finally:
@@ -171,6 +187,7 @@ def authenticate(api_key: str, ip: str = "") -> Optional[User]:
 
     ip 用于触发 per-IP 失败次数限流,防止 API Key 暴力枚举。
     本地内部调用可省略 ip。
+    支持旧版纯 SHA256 和新版 PBKDF2 两种哈希格式（向后兼容）。
     """
     if not api_key:
         return None
@@ -182,17 +199,31 @@ def authenticate(api_key: str, ip: str = "") -> Optional[User]:
     with _lock:
         conn = _get_conn()
         try:
-            key_hash = _hash_key(api_key)
+            # 1. 尝试旧版纯 SHA256（无 salt 的用户）
+            legacy_hash = _legacy_hash(api_key)
             cursor = conn.execute(
-                "SELECT id, name, config_json FROM users WHERE api_key_hash = ?",
-                (key_hash,)
+                "SELECT id, name, config_json, role, key_salt FROM users WHERE api_key_hash = ?",
+                (legacy_hash,)
             )
             row = cursor.fetchone()
+
+            # 2. 如果没命中，遍历有 salt 的用户用 PBKDF2 验证
+            if not row:
+                cursor = conn.execute(
+                    "SELECT id, name, config_json, role, key_salt, api_key_hash FROM users WHERE key_salt != ''"
+                )
+                for r in cursor.fetchall():
+                    expected = _derive_key(api_key, bytes.fromhex(r["key_salt"]))
+                    if expected == r["api_key_hash"]:
+                        row = r
+                        break
+
             if row:
                 user = User(
                     row["id"],
                     row["name"],
-                    json.loads(row["config_json"] or "{}")
+                    json.loads(row["config_json"] or "{}"),
+                    row.get("role", "user"),
                 )
             else:
                 user = None
@@ -213,7 +244,7 @@ def get_user_by_id(user_id: str) -> Optional[User]:
         conn = _get_conn()
         try:
             cursor = conn.execute(
-                "SELECT id, name, config_json FROM users WHERE id = ?",
+                "SELECT id, name, config_json, role FROM users WHERE id = ?",
                 (user_id,)
             )
             row = cursor.fetchone()
@@ -221,7 +252,8 @@ def get_user_by_id(user_id: str) -> Optional[User]:
                 return User(
                     row["id"],
                     row["name"],
-                    json.loads(row["config_json"] or "{}")
+                    json.loads(row["config_json"] or "{}"),
+                    row.get("role", "user"),
                 )
             return None
         finally:
@@ -234,12 +266,13 @@ def list_users() -> list[dict]:
         conn = _get_conn()
         try:
             cursor = conn.execute(
-                "SELECT id, name, created_at FROM users ORDER BY created_at DESC"
+                "SELECT id, name, role, created_at FROM users ORDER BY created_at DESC"
             )
             return [
                 {
                     "id": row["id"],
                     "name": row["name"],
+                    "role": row.get("role", "user"),
                     "created_at": row["created_at"],
                 }
                 for row in cursor.fetchall()
@@ -298,6 +331,30 @@ def auth_required(f):
             return {"success": False, "message": "未认证，请提供有效的 API Key"}, 401
 
         # 将用户对象附加到请求上下文
+        request.current_user = user
+        return f(*args, **kwargs)
+    return decorated
+
+
+def admin_required(f):
+    """管理员权限装饰器（用于 HTTP 路由）。
+
+    要求用户已认证且 role 为 admin。
+    认证未启用时直接放行。
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not AUTH_ENABLED:
+            return f(*args, **kwargs)
+
+        api_key = request.headers.get("X-API-Key", "")
+        ip = request.remote_addr or ""
+        user = authenticate(api_key, ip=ip)
+        if not user:
+            return {"success": False, "message": "未认证，请提供有效的 API Key"}, 401
+        if user.role != "admin":
+            return {"success": False, "message": "需要管理员权限"}, 403
+
         request.current_user = user
         return f(*args, **kwargs)
     return decorated

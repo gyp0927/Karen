@@ -496,26 +496,59 @@ _PLUGIN_FORBIDDEN_ATTRS = {
     "__getattribute__",
 }
 
+# 白名单：仅允许这些 AST 节点类型存在（防御未知语法绕过）
+_PLUGIN_ALLOWED_NODES: set[type] = {
+    ast.Module, ast.Expression, ast.Interactive,
+    ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+    ast.Return, ast.Delete, ast.Assign, ast.AugAssign, ast.AnnAssign,
+    ast.For, ast.While, ast.If, ast.With, ast.Try, ast.TryStar,
+    ast.ExceptHandler, ast.Raise, ast.Assert, ast.Pass, ast.Break, ast.Continue,
+    ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal,
+    ast.Expr, ast.TypeIgnore,
+    ast.BoolOp, ast.NamedExpr, ast.BinOp, ast.UnaryOp, ast.Lambda, ast.IfExp,
+    ast.Dict, ast.Set, ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp,
+    ast.Await, ast.Yield, ast.YieldFrom,
+    ast.Compare, ast.Call,
+    ast.FormattedValue, ast.JoinedStr, ast.Constant,
+    ast.Attribute, ast.Subscript, ast.Starred,
+    ast.Name, ast.List, ast.Tuple, ast.Slice,
+    ast.Load, ast.Store, ast.Del,
+    ast.And, ast.Or,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+    ast.LShift, ast.RShift, ast.BitOr, ast.BitXor, ast.BitAnd, ast.MatMult,
+    ast.Invert, ast.Not, ast.UAdd, ast.USub,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Is, ast.IsNot, ast.In, ast.NotIn,
+    ast.comprehension, ast.arguments, ast.arg, ast.keyword,
+    ast.alias, ast.withitem,
+}
+# 动态添加版本相关节点（Python 3.10+ Match 语句等）
+for _node_name in (
+    "Match", "match_case", "MatchValue", "MatchSingleton",
+    "MatchSequence", "MatchMapping", "MatchClass",
+    "MatchStar", "MatchAs", "MatchOr",
+):
+    _node_cls = getattr(ast, _node_name, None)
+    if _node_cls is not None:
+        _PLUGIN_ALLOWED_NODES.add(_node_cls)
+
 
 def _is_safe_plugin_filename(filename: str) -> bool:
-    """检查插件文件名是否安全（只允许简单的 .py 文件名）。"""
+    """检查插件文件名是否安全（只允许简单的 ASCII .py 文件名）。"""
     if not filename or not filename.endswith(".py"):
         return False
     name = filename[:-3]
-    # 只允许字母、数字、下划线、连字符
-    return name.isidentifier() or all(c.isalnum() or c in "_-" for c in name)
+    # 只允许 ASCII 字母、数字、下划线、连字符
+    return name.isidentifier() or all(
+        (c.isascii() and c.isalnum()) or c in "_-" for c in name
+    )
 
 
 def _scan_plugin_content(content: str) -> list[str]:
-    """AST 级扫描插件代码,挡 substring 黑名单挡不住的绕过手法。
+    """AST 级扫描插件代码。
 
-    挡的攻击向量:
-    - 危险模块 import / from import
-    - 危险调用名(eval/exec/getattr/system/...)
-    - 危险 dunder 属性访问(__class__/__subclasses__/__globals__ 链式)
-    - 字符串拼接 + getattr 间接调用(getattr 已直接禁)
-    - __builtins__['eval'] 等下标访问绕过
-    - Lambda / comprehension 中隐藏的危险调用
+    采用白名单+双层策略：
+    1. 白名单：仅允许已知安全的 AST 节点类型存在（防未知语法绕过）
+    2. 黑名单：在允许的节点中，禁止危险 import / 调用 / 属性访问
     """
     issues: list[str] = []
     try:
@@ -523,6 +556,15 @@ def _scan_plugin_content(content: str) -> list[str]:
     except SyntaxError as e:
         issues.append(f"语法错误: {e}")
         return issues
+
+    # 1. 白名单检查
+    disallowed = set()
+    for node in ast.walk(tree):
+        if type(node) not in _PLUGIN_ALLOWED_NODES:
+            disallowed.add(type(node).__name__)
+    if disallowed:
+        for name in sorted(disallowed):
+            issues.append(f"禁止的语法节点: {name}")
 
     def _check_name(node, name: str) -> bool:
         """递归检查 Name 节点，处理字符串拼接和 f-string 构造的调用名。"""
@@ -934,13 +976,15 @@ def list_users_api():
 @api_bp.route("/api/auth/users/<user_id>", methods=["DELETE"])
 @auth_required
 def delete_user_api(user_id):
-    """删除用户(需认证 + LOCAL_ONLY 双重保护)。用户只能删除自己。"""
+    """删除用户(需认证 + LOCAL_ONLY 双重保护)。管理员可删除任何用户，普通用户只能删除自己。"""
     if not AUTH_ENABLED:
         return {"success": False, "message": "认证系统未启用"}, 400
     try:
         from core.auth import get_current_user
         current_user = get_current_user()
-        if not current_user or current_user.id != user_id:
+        if not current_user:
+            return {"success": False, "message": "未认证"}, 401
+        if current_user.role != "admin" and current_user.id != user_id:
             return {"success": False, "message": "只能删除自己的账号"}, 403
         if delete_user(user_id):
             return {"success": True, "message": "用户已删除"}
