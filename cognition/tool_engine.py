@@ -94,8 +94,23 @@ async def execute_python(code: str) -> str:
     """
     if not _CODE_EXEC_ENABLED:
         return "[代码执行已禁用:请在环境变量中设置 ENABLE_CODE_EXECUTION=true 才能启用]"
+    # 安全限制：代码长度、黑名单关键词检查
+    if len(code) > 5000:
+        return "[代码执行被拒绝: 代码长度超过 5000 字符限制]"
+    _FORBIDDEN_CODE_PATTERNS = (
+        "import os", "import sys", "import subprocess", "import socket",
+        "import urllib", "import http", "import ftplib", "import smtplib",
+        "__import__", "eval(", "exec(", "open(", "compile(", "globals()", "locals()",
+    )
+    lowered = code.lower()
+    for pat in _FORBIDDEN_CODE_PATTERNS:
+        if pat in lowered:
+            logger.warning(f"[CodeExec] 拒绝执行含危险模式的代码: {pat}")
+            return f"[代码执行被拒绝: 检测到危险模式 '{pat}']"
+    # 审计日志：记录完整代码内容
+    logger.info(f"[CodeExec] 即将执行代码 ({len(code)} chars):\n{code}")
     try:
-        from tools.code_executor import execute_python, format_result
+        from tools.code_executor import execute_python
         result = await asyncio.to_thread(execute_python, code)
         if result.get("success"):
             output = result.get("stdout", "")

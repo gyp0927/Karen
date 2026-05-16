@@ -280,13 +280,18 @@ def auth_required(f):
 
     如果认证未启用，直接放行。
     否则检查 X-API-Key Header 或 api_key Cookie。
+    对于修改性操作（POST/PUT/DELETE/PATCH）强制要求 Header 认证，防止 CSRF。
     """
     @wraps(f)
     def decorated(*args, **kwargs):
         if not AUTH_ENABLED:
             return f(*args, **kwargs)
 
-        api_key = request.headers.get("X-API-Key", "") or request.cookies.get("api_key", "")
+        # 修改性操作强制使用 Header 认证，不接受 Cookie（防 CSRF）
+        if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            api_key = request.headers.get("X-API-Key", "")
+        else:
+            api_key = request.headers.get("X-API-Key", "") or request.cookies.get("api_key", "")
         ip = request.remote_addr or ""
         user = authenticate(api_key, ip=ip)
         if not user:

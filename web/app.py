@@ -80,7 +80,7 @@ socketio = SocketIO(app, cors_allowed_origins=_cors_origins, async_mode="threadi
 TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() in ("true", "1", "yes")
 
 # 配置相关路由仅允许本机访问（防止局域网用户窃取 API Key、滥用用户管理接口）
-LOCAL_ONLY_PREFIXES = ["/config", "/api/config", "/api/configs", "/knowledge", "/plugins", "/api/plugins/upload", "/mcp", "/api/mcp", "/api/auth/users"]
+LOCAL_ONLY_PREFIXES = ["/config", "/api/config", "/api/configs", "/knowledge", "/plugins", "/api/plugins/upload", "/mcp", "/api/mcp", "/api/auth/users", "/api/execute"]
 
 
 @app.route("/api/export", methods=["POST"])

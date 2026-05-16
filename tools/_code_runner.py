@@ -24,8 +24,6 @@ for _fname in (
     "globals",
     "locals",
     "vars",
-    "type",
-    "object",
     "memoryview",
     "getattr",
     "setattr",

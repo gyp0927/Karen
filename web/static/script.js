@@ -109,7 +109,15 @@ function safeRenderMarkdown(text) {
     return escapeHtml(text);
   }
   try {
-    return DOMPurify.sanitize(marked.parse(text));
+    return DOMPurify.sanitize(marked.parse(text), {
+      ALLOWED_TAGS: ['p','div','span','h1','h2','h3','h4','h5','h6','br','hr',
+        'strong','b','em','i','u','strike','del','a','img',
+        'ul','ol','li','table','thead','tbody','tr','th','td',
+        'pre','code','blockquote','sup','sub'],
+      ALLOWED_ATTR: ['href','title','alt','src','width','height','class','id',
+        'style','target','rel','lang'],
+      ALLOW_DATA_ATTR: false,
+    });
   } catch (e) {
     return escapeHtml(text);
   }
@@ -1124,7 +1132,7 @@ function renderModelSwitcherList(configs, activeId) {
     const icon = PROVIDER_ICONS[cfg.provider] || "🤖";
     const pName = PROVIDER_NAMES[cfg.provider] || cfg.provider;
     return `
-      <div class="model-switcher-item ${isActive ? 'active' : ''}" data-config-id="${cfg.id}">
+      <div class="model-switcher-item ${isActive ? 'active' : ''}" data-config-id="${escapeHtml(cfg.id)}">
         <div class="model-switcher-icon">${icon}</div>
         <div class="model-switcher-info">
           <div class="model-switcher-name">${escapeHtml(cfg.name)}</div>
