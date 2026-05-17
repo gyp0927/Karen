@@ -7,6 +7,7 @@ import time
 import asyncio
 import threading
 import unicodedata
+import weakref
 from dataclasses import asdict
 from typing import Optional, Callable
 
@@ -34,23 +35,17 @@ logger = logging.getLogger(__name__)
 # 当前连接池 max_connections=100,keepalive=20,设 8-12 比较安全。
 # 按 event loop 隔离 Semaphore，避免 threading 模式下跨 loop 使用导致异常。
 _LLM_SEM_LIMIT = 8
-_llm_semaphores: dict[int, asyncio.Semaphore] = {}
+# WeakKeyDictionary: loop 被 GC 后自动清除，避免 id(loop) 重用导致死锁
+_llm_semaphores: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def _get_llm_sem() -> asyncio.Semaphore:
     """获取绑定到当前 event loop 的并发 Semaphore。"""
     loop = asyncio.get_running_loop()
-    loop_id = id(loop)
-    sem = _llm_semaphores.get(loop_id)
+    sem = _llm_semaphores.get(loop)
     if sem is None:
         sem = asyncio.Semaphore(_LLM_SEM_LIMIT)
-        _llm_semaphores[loop_id] = sem
-        # 防止 dict 无限增长：loop 被 GC 后 id 可能重用，数量通常很少，
-        # 极端场景下（线程池频繁回收）做上限兜底
-        if len(_llm_semaphores) > 64:
-            # 保留最近的条目，移除最旧的（Python 3.7+ dict 保持插入顺序）
-            for old_id in list(_llm_semaphores.keys())[:-32]:
-                del _llm_semaphores[old_id]
+        _llm_semaphores[loop] = sem
     return sem
 
 

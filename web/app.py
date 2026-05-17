@@ -104,6 +104,10 @@ _cors_origins = [o.strip() for o in _CORS_ORIGINS_ENV.split(",") if o.strip()] o
 CORS(app, origins=_cors_origins)
 socketio = SocketIO(app, cors_allowed_origins=_cors_origins, async_mode="threading")
 
+# 注册 API Blueprint（必须放在 if __name__ 之前，确保 WSGI 入口和 __main__ 入口行为一致）
+from web.api import api_bp
+app.register_blueprint(api_bp)
+
 # 是否信任反向代理传来的 X-Forwarded-For / X-Real-Ip
 # 默认不信任(否则任何外部用户可伪造 127.0.0.1 绕过 LOCAL_ONLY 校验)
 TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() in ("true", "1", "yes")
@@ -1273,12 +1277,12 @@ def handle_disconnect():
     cleanup_socket(sid)
 
 
-if __name__ == "__main__":
-    print("Initializing agents...")
-    init_agents()
-    start_socket_cleanup()
-    print("Agents initialized!")
+# 模块加载时即触发 Agent 图编译、记忆系统后台预热与 socket 清理定时器，
+# 确保 WSGI 入口(gunicorn 等)和 __main__ 入口行为一致。
+init_agents()
+start_socket_cleanup()
 
+if __name__ == "__main__":
     # 预热 LLM 连接 — 提前建立 TCP/TLS,减少首 token 延迟。
     # 失败不阻塞启动(如 API Key 未配置时)。
     try:
@@ -1294,12 +1298,5 @@ if __name__ == "__main__":
     debug_mode = os.getenv("FLASK_DEBUG", "false").lower() in ("true", "1", "yes")
     print(f"Starting Flask server at http://{bind_host}:{bind_port}")
     print(f"Local access: http://127.0.0.1:{bind_port}")
-    socketio.run(app, host=bind_host, port=bind_port, debug=debug_mode)
-
-
-from web.api import api_bp
-app.register_blueprint(api_bp)
-
-# 模块加载时即触发 Agent 图编译与记忆系统后台预热，
-# 确保 WSGI 入口(gunicorn 等)和 __main__ 入口行为一致。
-init_agents()
+    # 强制禁用 reloader，避免 FLASK_DEBUG=true 时双进程导致 SocketIO 连接异常
+    socketio.run(app, host=bind_host, port=bind_port, debug=debug_mode, use_reloader=False)
