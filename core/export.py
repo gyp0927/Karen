@@ -71,6 +71,12 @@ def export_html(messages: list[BaseMessage], title: str = "聊天记录") -> str
         f"  <div class='meta'>导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 消息数: {len(messages)}</div>",
     ]
 
+    # HTML 转义表：用 str.translate 替代链式 replace，减少中间字符串创建
+    _HTML_ESCAPE_TRANS = str.maketrans({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;",
+        '"': "&quot;", "'": "&#x27;", "\n": "<br>",
+    })
+
     for msg in messages:
         if isinstance(msg, HumanMessage):
             css_class = "user"
@@ -82,15 +88,7 @@ def export_html(messages: list[BaseMessage], title: str = "聊天记录") -> str
             css_class = "assistant"
             sender = getattr(msg, "name", "AI") or "AI"
 
-        # 简单转义 HTML
-        content = (msg.content
-                   .replace("&", "&amp;")
-                   .replace("<", "&lt;")
-                   .replace(">", "&gt;")
-                   .replace('"', "&quot;")
-                   .replace("'", "&#x27;"))
-        # 保留换行
-        content = content.replace("\n", "<br>")
+        content = msg.content.translate(_HTML_ESCAPE_TRANS)
 
         lines.append(f'  <div class="message {css_class}">')
         lines.append(f'    <div class="sender">{sender}</div>')

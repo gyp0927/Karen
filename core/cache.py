@@ -87,26 +87,30 @@ class ResponseCache:
         raw_key = "".join(parts)
         return hashlib.blake2b(raw_key.encode("utf-8"), digest_size=32).hexdigest()
 
+    # 敏感关键词（跳过缓存，避免敏感信息被缓存）
+    _SKIP_KEYWORDS = frozenset([
+        "密码", "password", "token", "secret", "api_key", "apikey", "api-key",
+        "身份证", "手机号", "信用卡", "cvv",
+        "密钥", "key", "secret_key", "private_key",
+        "access_token", "bearer", "auth",
+    ])
+
     def _should_skip_cache(self, messages: list) -> bool:
         """判断是否应该跳过缓存。"""
-        # 检查消息中是否包含敏感关键词
-        skip_keywords = [
-            "密码", "password", "token", "secret", "api_key", "apikey", "api-key",
-            "身份证", "手机号", "信用卡", "cvv",
-            "密钥", "key", "secret_key", "private_key",
-            "access_token", "bearer", "auth",
-        ]
         for msg in messages:
             content = getattr(msg, "content", "")
-            if any(kw in content.lower() for kw in skip_keywords):
+            if not content:
+                continue
+            content_lower = content.lower()
+            if any(kw in content_lower for kw in self._SKIP_KEYWORDS):
                 return True
         return False
 
     # 时效性查询（短 TTL，避免过期信息留存太久）
-    _VOLATILE_KW = (
+    _VOLATILE_KW = frozenset([
         "天气", "气温", "股价", "新闻", "今天", "现在", "目前", "最新", "实时",
         "weather", "stock", "news", "today", "yesterday", "latest", "current", "now",
-    )
+    ])
     # 时效性按比例缩短（默认 24h → 1h 左右）
     _VOLATILE_TTL_FACTOR = 1 / 24
 
