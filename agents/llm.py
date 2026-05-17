@@ -7,7 +7,8 @@ import threading
 from collections import OrderedDict
 from typing import Optional, Callable
 
-from langchain_openai import ChatOpenAI
+# 延迟导入 langchain_openai：该包首次导入会拉入 PIL/numpy 等大量依赖，
+# 耗时 ~15-20s。仅在首次创建 LLM 实例时导入，避免模块级导入拖慢启动。
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ def cleanup_llm_config(sid: str = ""):
 # 实例内部持有按 loop 绑定的 httpx client,所以缓存键也要含 loop id,
 # 否则换 loop 时旧实例的 client 已失效。
 
-_llm_cache: "OrderedDict[tuple, ChatOpenAI]" = OrderedDict()
+_llm_cache: OrderedDict = OrderedDict()
 _llm_cache_lock = threading.Lock()
 _LLM_CACHE_MAX = 16
 
@@ -186,7 +187,7 @@ def _make_cache_key(kwargs: dict) -> str:
     return result
 
 
-def get_llm(sid: str = "") -> ChatOpenAI:
+def get_llm(sid: str = ""):
     """获取 LLM 实例（带缓存）。"""
     kwargs = _build_llm_kwargs(sid)
     try:
@@ -203,6 +204,7 @@ def get_llm(sid: str = "") -> ChatOpenAI:
         if http_async_client:
             kwargs["http_async_client"] = http_async_client
         kwargs["streaming"] = True
+        from langchain_openai import ChatOpenAI
         instance = ChatOpenAI(**kwargs)
         _llm_cache[cache_key] = instance
         if len(_llm_cache) > _LLM_CACHE_MAX:
