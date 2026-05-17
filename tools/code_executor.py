@@ -62,8 +62,12 @@ _ALLOWED_MODULES = {
     "itertools", "collections", "functools", "heapq", "bisect",
     "json", "re", "string", "textwrap", "hashlib", "base64",
     "typing", "copy", "pprint", "numbers", "abc",
-    "numpy", "pandas",
 }
+
+# numpy/pandas 默认从白名单移除：底层 C 扩展存在已知逃逸路径（可通过内部机制触达 os.system）。
+# 高级用户可通过环境变量 CODE_EXECUTION_ALLOW_NUMPY=1 显式启用，但需自行承担风险。
+if os.getenv("CODE_EXECUTION_ALLOW_NUMPY", "").lower() in ("1", "true", "yes"):
+    _ALLOWED_MODULES.update({"numpy", "pandas"})
 
 
 class SecurityError(Exception):
@@ -197,9 +201,16 @@ def execute_python(code: str, timeout: int = 30) -> dict:
             "duration_ms": 0,
         }
 
-    # 步骤2: 在子进程中执行（超时保护）
+    # 步骤2: 在子进程中执行（超时保护 + 最小环境变量）
     runner_path = os.path.join(os.path.dirname(__file__), "_code_runner.py")
     start_time = time.time()
+    # 最小化环境变量，防止通过 env 泄漏敏感信息或利用 PATH 逃逸
+    minimal_env = {
+        "PYTHONPATH": os.getenv("PYTHONPATH", ""),
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "SYSTEMROOT": os.getenv("SYSTEMROOT", ""),  # Windows 上某些库需要
+    }
     try:
         proc = subprocess.run(
             [sys.executable, runner_path],
@@ -207,6 +218,7 @@ def execute_python(code: str, timeout: int = 30) -> dict:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=minimal_env,
         )
         duration_ms = int((time.time() - start_time) * 1000)
 
