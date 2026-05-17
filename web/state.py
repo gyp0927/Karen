@@ -61,11 +61,12 @@ class SocketState:
 # 按 socket sid 存储的隔离状态
 socket_states: dict[str, SocketState] = {}
 _socket_states_lock = threading.Lock()
-_MAX_SOCKET_STATES = 1000  # 硬上限，极端高并发场景下兜底
+_MAX_SOCKET_STATES = 5000  # 硬上限，极端高并发场景下兜底
 
 # Socket 级配置隔离：key = socket sid, value = {provider, model, apiKey, baseUrl, name}
 socket_configs: dict[str, dict] = {}
 _socket_configs_lock = threading.Lock()
+_MAX_SOCKET_CONFIGS = 5000  # 与 socket_states 保持一致的硬上限
 
 # 全局预编译的图（图本身不区分 socket，Agent 函数通过 sid 获取配置）
 fast_graph = None
@@ -94,6 +95,25 @@ def _evict_oldest_socket_states(count: int) -> None:
     for old_sid in sorted_sids[:count]:
         socket_states.pop(old_sid, None)
         logger.warning(f"Socket state evicted due to hard limit: sid={old_sid}")
+
+
+def set_socket_config(sid: str, config: dict) -> None:
+    """设置 socket 配置（线程安全），超限时淘汰最老的配置。"""
+    with _socket_configs_lock:
+        if len(socket_configs) >= _MAX_SOCKET_CONFIGS:
+            _evict_oldest_socket_configs(10)
+        socket_configs[sid] = config
+
+
+def _evict_oldest_socket_configs(count: int) -> None:
+    """驱逐最老的 socket 配置。调用方需持有 _socket_configs_lock。"""
+    if len(socket_configs) <= 0:
+        return
+    # socket_configs 没有 last_active，按 FIFO 近似淘汰
+    old_sids = list(socket_configs.keys())[:count]
+    for old_sid in old_sids:
+        socket_configs.pop(old_sid, None)
+        logger.warning(f"Socket config evicted due to hard limit: sid={old_sid}")
 
 
 def cleanup_socket(sid: str):

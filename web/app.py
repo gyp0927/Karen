@@ -1144,13 +1144,13 @@ def handle_set_model(data):
                 from core.config import get_provider
 
                 provider = get_provider()
-                socket_configs[sid] = {
+                _web_state.set_socket_config(sid, {
                     "provider": provider,
                     "model": model_name,
                     "apiKey": "",
                     "baseUrl": BASE_URLS.get(provider, ""),
                     "name": f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}",
-                }
+                })
 
         clear_llm_cache()
         init_agents()
@@ -1286,14 +1286,13 @@ def handle_set_user_config(data):
         emit("config_error", {"message": "请选择模型"})
         return
 
-    with _socket_configs_lock:
-        socket_configs[sid] = {
-            "provider": provider,
-            "model": model,
-            "apiKey": api_key,
-            "baseUrl": base_url,
-            "name": name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}",
-        }
+    _web_state.set_socket_config(sid, {
+        "provider": provider,
+        "model": model,
+        "apiKey": api_key,
+        "baseUrl": base_url,
+        "name": name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}",
+    })
 
     logger.info(f"User config set for sid={sid}, provider={provider}, model={model}")
     emit(
