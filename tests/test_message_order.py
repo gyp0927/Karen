@@ -46,6 +46,35 @@ def test_normalize_message_order_named_system():
     assert result[3].content == "hello"
 
 
+def test_reorder_empty_list():
+    """空列表应返回空列表"""
+    from agents.nodes import _reorder_system_first
+
+    result = _reorder_system_first([])
+    assert result == []
+
+
+def test_reorder_all_system_messages():
+    """全是 SystemMessage 时应保持原样"""
+    from agents.nodes import _reorder_system_first
+
+    messages = [
+        SystemMessage(content="sys1"),
+        SystemMessage(content="sys2"),
+    ]
+    result = _reorder_system_first(messages)
+    assert len(result) == 2
+    assert all(isinstance(m, SystemMessage) for m in result)
+
+
+def test_normalize_empty_list():
+    """空列表应返回空列表"""
+    from agents.nodes import _normalize_message_order
+
+    result = _normalize_message_order([])
+    assert result == []
+
+
 def test_normalize_and_reorder_combined():
     """组合使用：先 normalize 再 reorder_system_first"""
     from agents.nodes import _normalize_message_order, _reorder_system_first

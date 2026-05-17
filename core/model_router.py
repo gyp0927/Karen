@@ -315,9 +315,9 @@ class ModelRouter:
     def _load_tiers(self) -> None:
         """从配置文件加载模型档位（带 mtime 缓存刷新）。"""
         defaults = {
-            "light": {"provider": "ollama", "model": "llama3.2", "description": "轻量模型（简单问答）"},
-            "default": {"provider": "ollama", "model": "llama3.2", "description": "默认模型"},
-            "powerful": {"provider": "ollama", "model": "llama3.2", "description": "强力模型（复杂任务）"},
+            "light": {"provider": "ollama", "model": "llama3.2", "description": "轻量模型（简单问答）", "options": {"num_ctx": 2048}},
+            "default": {"provider": "ollama", "model": "llama3.2", "description": "默认模型", "options": {"num_ctx": 4096}},
+            "powerful": {"provider": "ollama", "model": "llama3.2", "description": "强力模型（复杂任务）", "options": {"num_ctx": 8192}},
         }
         mtime = 0.0
         if os.path.exists(_CONFIG_FILE):
@@ -428,14 +428,14 @@ class ModelRouter:
         # 复杂但非编码的问题降级到 default，让它走通用模型。
         if tier == "powerful" and not self._is_coding_intent(user_message):
             logger.info(
-                f"Powerful tier requested but non-coding intent detected, "
-                f"downgrading to default. message='{user_message[:50]}...'"
+                "Powerful tier requested but non-coding intent detected, "
+                "downgrading to default."
             )
             tier = "default"
 
         config = self.get_tier_config(tier)
 
-        logger.info(f"Model routing: tier={tier}, score={analysis['score']}, message='{user_message[:50]}...'")
+        logger.info(f"Model routing: tier={tier}, score={analysis['score']}")
 
         return {
             "tier": tier,

@@ -486,6 +486,9 @@ def handle_message(data):
     if not user_message:
         emit("error", {"message": "Empty message"})
         return
+    if len(user_message) > 10000:
+        emit("error", {"message": "消息过长，请控制在 10000 字符以内"})
+        return
 
     # 检查是否已配置模型
     if not has_valid_config(sid):
@@ -687,12 +690,13 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         }
         return await run_parallel_search(search_state)
 
-    if state.pending_search is not None:
-        # 清理上一轮遗留的搜索任务
-        if not state.pending_search.done():
-            state.pending_search.cancel()
-        state.pending_search = None
-    state.pending_search = asyncio.create_task(_pre_search())
+    async with state._search_lock:
+        if state.pending_search is not None:
+            # 清理上一轮遗留的搜索任务
+            if not state.pending_search.done():
+                state.pending_search.cancel()
+            state.pending_search = None
+        state.pending_search = asyncio.create_task(_pre_search())
 
     # 始终使用快速模式图
     graph = _web_state.fast_graph
@@ -1012,9 +1016,16 @@ def handle_delete_session(data):
 
             def _bg_clear_memories():
                 try:
-                    n = asyncio.run(get_memory_store().delete_session_memories(session_id))
+                    n = asyncio.run(
+                        asyncio.wait_for(
+                            get_memory_store().delete_session_memories(session_id),
+                            timeout=30.0,
+                        )
+                    )
                     if n:
                         logger.info(f"Cleared {n} memories for deleted session {session_id}")
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout clearing memories for session {session_id}")
                 except Exception as e:
                     logger.warning(f"Failed to clear memories for session {session_id}: {e}")
 

@@ -35,6 +35,8 @@ class SocketState:
         self.last_active = time.time()
         # 预启动的搜索任务（和 LLM 回复并行）
         self.pending_search: asyncio.Task | None = None
+        # 保护 pending_search 的并发读写
+        self._search_lock = asyncio.Lock()
 
     def touch(self):
         """更新最后活跃时间。"""

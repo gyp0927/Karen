@@ -40,16 +40,6 @@ async def _safe_search(
             return f"[{label}]\n\n{result}"
         else:
             logger.debug(f"{label}: 空结果")
-    except TimeoutError:
-        if fast_mode and timeout:
-            logger.info(f"{label} 快速模式超时跳过（{timeout}s）")
-        else:
-            logger.warning(f"{label} 超时")
-    except TimeoutError:
-        if fast_mode and timeout:
-            logger.info(f"{label} 快速模式超时跳过（{timeout}s）")
-        else:
-            logger.warning(f"{label} 超时")
     except ConnectionError as e:
         logger.warning(f"{label} 网络错误: {e}")
     except ImportError as e:
@@ -186,5 +176,10 @@ async def run_parallel_search(state: dict) -> str:
         tasks.append(knowledge_searcher_agent(user_message))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    search_parts = [r for r in results if isinstance(r, str) and r]
+    search_parts = []
+    for r in results:
+        if isinstance(r, str) and r:
+            search_parts.append(r)
+        elif isinstance(r, Exception):
+            logger.warning(f"Search task failed: {type(r).__name__}: {r}")
     return "\n\n".join(search_parts) if search_parts else ""

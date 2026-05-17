@@ -1,3 +1,4 @@
+import re
 from collections.abc import Sequence
 from operator import add
 from typing import Annotated, TypedDict
@@ -56,16 +57,15 @@ def create_coordination_graph(coordinator_agent, researcher_agent, tool_caller, 
 
     workflow.set_entry_point("coordinator")
 
+    _route_pattern = re.compile(r"\[route:\s*(subagent|responder|researcher)\s*\]")
+
     def _route_after_coordinator(state: AgentState) -> str:
         """解析 Coordinator 的输出，决定是否需要搜索或子 Agent 委派。"""
         for msg in reversed(state.get("messages", [])):
             content = getattr(msg, "content", "")
-            if "[route: subagent]" in content:
-                return "subagent"
-            if "[route: responder]" in content:
-                return "responder"
-            if "[route: researcher]" in content:
-                return "researcher"
+            match = _route_pattern.search(content)
+            if match:
+                return match.group(1)
         # 默认走 researcher（保守策略）
         return "researcher"
 

@@ -247,16 +247,47 @@ class PluginRegistry:
         }
     )
 
+    # 白名单：仅允许这些 AST 节点类型存在（与 web/api.py 保持一致）
+    _ALLOWED_NODES: set[type] = set()
+
     def _scan_plugin_ast(self, source: str, filepath: str) -> bool:
-        """对插件源码进行 AST 安全检查。
+        """对插件源码进行 AST 安全检查（白名单+黑名单双层策略）。
 
         TODO: 添加可选的插件签名/哈希验证机制，防止插件被篡改。
         当前仅做 AST 静态扫描，不验证文件完整性。
 
-        禁止导入危险模块和调用危险函数。
+        1. 白名单：仅允许已知的 AST 节点类型
+        2. 黑名单：禁止导入危险模块和调用危险函数
         这是最后一道防线——插件仍然运行在宿主进程中。
         """
         import ast
+
+        # 延迟初始化白名单（避免在模块导入时访问 ast 的某些属性）
+        if not self._ALLOWED_NODES:
+            self._ALLOWED_NODES = {
+                ast.Module, ast.Expression, ast.Interactive,
+                ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                ast.Return, ast.Delete, ast.Assign, ast.AugAssign, ast.AnnAssign,
+                ast.For, ast.While, ast.If, ast.With, ast.Try, ast.TryStar,
+                ast.ExceptHandler, ast.Raise, ast.Assert, ast.Pass, ast.Break, ast.Continue,
+                ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal, ast.Expr,
+                ast.TypeIgnore, ast.BoolOp, ast.NamedExpr, ast.BinOp, ast.UnaryOp,
+                ast.Lambda, ast.IfExp, ast.Dict, ast.Set, ast.ListComp, ast.SetComp,
+                ast.GeneratorExp, ast.DictComp, ast.Await, ast.Yield, ast.YieldFrom,
+                ast.Compare, ast.Call, ast.FormattedValue, ast.JoinedStr,
+                ast.Constant, ast.Attribute, ast.Subscript, ast.Starred,
+                ast.Name, ast.List, ast.Tuple, ast.Slice,
+                ast.Load, ast.Store, ast.Del,
+                ast.And, ast.Or, ast.Add, ast.Sub, ast.Mult, ast.Div,
+                ast.FloorDiv, ast.Mod, ast.Pow, ast.LShift, ast.RShift,
+                ast.BitOr, ast.BitXor, ast.BitAnd, ast.MatMult,
+                ast.Invert, ast.Not, ast.UAdd, ast.USub,
+                ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+                ast.Is, ast.IsNot, ast.In, ast.NotIn,
+                ast.comprehension, ast.ExceptHandler, ast.alias, ast.arg, ast.arguments,
+                ast.keyword, ast.Match, ast.MatchValue, ast.MatchSequence,
+                ast.MatchMapping, ast.MatchClass, ast.MatchStar, ast.MatchAs, ast.MatchOr,
+            }
 
         try:
             tree = ast.parse(source)
@@ -265,6 +296,12 @@ class PluginRegistry:
             return False
 
         for node in ast.walk(tree):
+            # 白名单检查
+            if type(node) not in self._ALLOWED_NODES:
+                logger.warning(f"Plugin {filepath}: disallowed AST node type '{type(node).__name__}'")
+                return False
+
+            # 黑名单检查
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = []
                 if isinstance(node, ast.Import):

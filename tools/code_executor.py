@@ -226,7 +226,10 @@ def execute_python(code: str, timeout: int = 30) -> dict:
     runner_path = os.path.join(os.path.dirname(__file__), "_code_runner.py")
     start_time = time.time()
 
-    # Windows 平台沙箱能力有限，打 warning 日志
+    # Windows 平台沙箱能力有限（无 resource/prctl/setrlimit 支持），
+    # 子进程仍可通过标准库（如 _winapi、nt 模块）进行部分系统操作，
+    # 无法像 Linux 那样通过 RLIMIT_NOFILE/RLIMIT_AS 严格限制资源。
+    # 生产环境建议在 Linux 容器内运行代码执行功能。
     if not _RESOURCE_AVAILABLE and platform.system() == "Windows":
         logger.warning("[WARN] 代码执行在非 Linux 平台上运行，沙箱隔离有限")
 

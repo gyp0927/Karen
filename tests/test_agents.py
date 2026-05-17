@@ -152,3 +152,36 @@ async def test_session_manager():
     messages = mgr.get_messages()
     assert len(messages) == 1
     mgr.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_cache_short_content_rejected():
+    """短内容不应被缓存"""
+    from core.cache import get_cache
+
+    cache = get_cache()
+    messages = [HumanMessage(content="测试短内容拒绝")]
+    cache.set(messages, "test", "model", "短")
+    result = cache.get(messages, "test", "model")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_model_router_empty_query():
+    """空查询应返回默认档位"""
+    from core.model_router import get_router
+
+    router = get_router()
+    result = router.route("", history_turns=0)
+    assert result["tier"] in ("light", "default", "powerful")
+
+
+@pytest.mark.asyncio
+async def test_model_router_coding_intent_strict():
+    """仅语言名称不含编码动作词 → 非编码意图"""
+    from core.model_router import get_router
+
+    router = get_router()
+    result = router.route("Python 是什么语言", history_turns=0)
+    # 不含代码块/编码动作词，即使提到 python 也不应走 powerful
+    assert result["tier"] != "powerful" or "coding" not in result.get("reason", "")

@@ -118,7 +118,7 @@ function safeRenderMarkdown(text) {
         'ul','ol','li','table','thead','tbody','tr','th','td',
         'pre','code','blockquote','sup','sub'],
       ALLOWED_ATTR: ['href','title','alt','src','width','height','class','id',
-        'style','target','rel','lang'],
+        'target','rel','lang'],
       ALLOW_DATA_ATTR: false,
     });
   } catch (e) {

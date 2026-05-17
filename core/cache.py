@@ -101,7 +101,6 @@ class ResponseCache:
             "信用卡",
             "cvv",
             "密钥",
-            "key",
             "secret_key",
             "private_key",
             "access_token",

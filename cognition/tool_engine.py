@@ -127,8 +127,10 @@ DEFAULT_TOOLS: list[BaseTool] = [
     memory_search,
     knowledge_search,
 ]
-if _CODE_EXEC_ENABLED:
-    DEFAULT_TOOLS.append(execute_python)
+# 安全：execute_python 不通过 LLM tool calling 自动触发，
+# 只允许用户通过 /api/execute 端点手动执行，防止恶意提示词诱导 LLM 执行危险代码。
+# if _CODE_EXEC_ENABLED:
+#     DEFAULT_TOOLS.append(execute_python)
 
 
 def get_available_tools() -> list[BaseTool]:

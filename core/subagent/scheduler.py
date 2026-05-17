@@ -168,7 +168,9 @@ class TaskScheduler:
             return self._rank_aggregate(results)
         if strategy == AggregationStrategy.BEST:
             return self._best_aggregate(results)
-        if strategy == AggregationStrategy.CUSTOM and custom_aggregator:
+        if strategy == AggregationStrategy.CUSTOM:
+            if custom_aggregator is None:
+                raise ValueError("CUSTOM strategy requires custom_aggregator")
             return custom_aggregator(results), 1.0
 
         return self._merge_aggregate(results)

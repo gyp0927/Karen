@@ -55,7 +55,7 @@ _auth_purge_counter = 0
 
 # 默认管理员配置（首次启动且用户表为空时自动创建）
 _DEFAULT_ADMIN_NAME = os.getenv("DEFAULT_ADMIN_NAME", "admin")
-_DEFAULT_ADMIN_API_KEY = os.getenv("DEFAULT_ADMIN_API_KEY", "karen-admin-default-key")
+_DEFAULT_ADMIN_API_KEY = os.getenv("DEFAULT_ADMIN_API_KEY", "")
 
 # 默认密码：优先从环境变量读取，其次从持久化文件读取，最后随机生成。
 # 随机生成时会写入 data/.admin_password 并打印到控制台，避免硬编码弱密码。

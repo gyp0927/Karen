@@ -9,6 +9,33 @@ from core.subagent.aggregator import (
 from core.subagent.base import SubTaskResult
 
 
+class TestMergeCodeReviewsBoundary:
+    """merge_code_reviews 边界条件测试"""
+
+    def test_empty_results(self):
+        """空结果列表应返回友好提示"""
+        output = merge_code_reviews([])
+        assert "未发现明显问题" in output
+
+    def test_all_failed_results(self):
+        """全部失败的子任务应返回提示"""
+        results = [
+            SubTaskResult(task_id="t1", success=False, error="fail"),
+            SubTaskResult(task_id="t2", success=False, error="timeout"),
+        ]
+        output = merge_code_reviews(results)
+        assert "未发现明显问题" in output
+
+    def test_no_location_in_output(self):
+        """输出不含 severity 标记时应返回未发现明显问题"""
+        results = [
+            SubTaskResult(task_id="t1", success=True, output="总体设计良好"),
+        ]
+        output = merge_code_reviews(results)
+        # 不含 P0/P1/P2/P3/严重/中等/轻微/建议标记的内容会被忽略
+        assert "未发现明显问题" in output
+
+
 class TestMergeCodeReviews:
     def test_deduplicate_by_location(self):
         """同一位置的多条问题应去重，保留最高严重级别。"""
@@ -99,6 +126,23 @@ class TestMergeCodeReviews:
         assert "P0" in output or "严重" in output
 
 
+class TestMergeResearchBoundary:
+    """merge_research 边界条件测试"""
+
+    def test_empty_results(self):
+        """空结果列表应返回提示"""
+        output = merge_research([])
+        assert "所有研究子任务均失败" in output
+
+    def test_single_result(self):
+        """单条结果应正常输出"""
+        results = [
+            SubTaskResult(task_id="t1", success=True, output="唯一结果"),
+        ]
+        output = merge_research(results)
+        assert "唯一结果" in output
+
+
 class TestMergeResearch:
     def test_merge_multiple_angles(self):
         """多个研究角度的结果应被组织在一起。"""
@@ -147,6 +191,35 @@ class TestMergeResearch:
         assert "所有研究子任务均失败" in output
 
 
+class TestVoteBooleanBoundary:
+    """vote_boolean 边界条件测试"""
+
+    def test_empty_results(self):
+        """空结果列表应返回提示"""
+        output = vote_boolean([])
+        assert "无法达成有效表决" in output
+
+    def test_tie_votes(self):
+        """赞成反对各半时应合理处理"""
+        results = [
+            SubTaskResult(task_id="t1", success=True, output="是的，推荐"),
+            SubTaskResult(task_id="t2", success=True, output="不，不推荐"),
+        ]
+        output = vote_boolean(results)
+        # 平局时应有明确提示
+        assert "是" in output or "否" in output or "分歧" in output or "无法" in output
+
+    def test_mixed_success(self):
+        """部分成功部分失败时应基于成功结果表决"""
+        results = [
+            SubTaskResult(task_id="t1", success=True, output="yes"),
+            SubTaskResult(task_id="t2", success=False, error="fail"),
+            SubTaskResult(task_id="t3", success=True, output="yes"),
+        ]
+        output = vote_boolean(results)
+        assert "是" in output or "yes" in output
+
+
 class TestVoteBoolean:
     def test_majority_yes(self):
         """多数赞成时应返回是。"""
@@ -175,6 +248,36 @@ class TestVoteBoolean:
         ]
         output = vote_boolean(results)
         assert "无法达成有效表决" in output
+
+
+class TestRankByConfidenceBoundary:
+    """rank_by_confidence 边界条件测试"""
+
+    def test_empty_results(self):
+        """空结果列表应返回提示"""
+        output = rank_by_confidence([])
+        assert "所有子任务均失败" in output
+
+    def test_no_score_metadata(self):
+        """缺少 score metadata 时应基于成功状态处理"""
+        results = [
+            SubTaskResult(task_id="t1", success=True, output="结果A"),
+            SubTaskResult(task_id="t2", success=True, output="结果B"),
+        ]
+        output = rank_by_confidence(results)
+        assert "结果A" in output or "结果B" in output
+
+    def test_same_score(self):
+        """相同 score 时应保留所有结果"""
+        results = [
+            SubTaskResult(task_id="t1", success=True, output="结果A", metadata={"score": 0.5}),
+            SubTaskResult(task_id="t2", success=True, output="结果B", metadata={"score": 0.5}),
+        ]
+        output = rank_by_confidence(results)
+        # 最优结果中包含第一个结果的 output
+        assert "结果A" in output
+        # 其他候选只显示 task_id，不显示 output
+        assert "t2" in output
 
 
 class TestRankByConfidence:

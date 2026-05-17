@@ -1962,7 +1962,7 @@
         const item = document.createElement("div");
         item.className = "doc-item";
         item.innerHTML = `
-          <span>${d.day || "-"}</span>
+          <span>${escapeHtml(d.day || "-")}</span>
           <span style="text-align:center">${d.calls || 0}</span>
           <span style="text-align:center">${(d.tokens || 0).toLocaleString()}</span>
           <span style="text-align:right">$${(d.cost || 0).toFixed(4)}</span>

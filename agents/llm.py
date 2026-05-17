@@ -6,6 +6,10 @@ import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 # 延迟导入 langchain_openai：该包首次导入会拉入 PIL/numpy 等大量依赖，
 # 耗时 ~15-20s。仅在首次创建 LLM 实例时导入，避免模块级导入拖慢启动。
@@ -146,10 +150,21 @@ def _build_llm_kwargs(sid: str = "") -> dict:
                     api_key = get_api_key(provider)
                 except ValueError:
                     api_key = ""
-        kwargs = {"api_key": api_key, "base_url": base_url, "model": cfg.get("model", ""), "temperature": 0.7}
+        temperature = cfg.get("temperature") if cfg else None
+        kwargs = {
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": cfg.get("model", ""),
+            "temperature": temperature if temperature is not None else 0.7,
+        }
     else:
         provider = get_provider()
-        kwargs = {"api_key": get_api_key(), "base_url": get_base_url(), "model": get_model_name(), "temperature": 0.7}
+        kwargs = {
+            "api_key": get_api_key(),
+            "base_url": get_base_url(),
+            "model": get_model_name(),
+            "temperature": 0.7,
+        }
     if provider == "kimi-code":
         kwargs["default_headers"] = {
             "User-Agent": "claude-code/1.0",
@@ -198,7 +213,7 @@ def _make_cache_key(kwargs: dict) -> str:
     return result
 
 
-def get_llm(sid: str = ""):
+def get_llm(sid: str = "") -> "ChatOpenAI":
     """获取 LLM 实例（带缓存）。"""
     kwargs = _build_llm_kwargs(sid)
     try:

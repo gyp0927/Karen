@@ -207,3 +207,44 @@ class TestTaskScheduler:
         assert result.final_output == ""
         assert result.confidence == 0.0
         assert len(result.results) == 0
+
+    @pytest.mark.asyncio
+    async def test_all_tasks_failed(self):
+        """All tasks failing should result in zero confidence."""
+        scheduler = TaskScheduler(
+            max_concurrency=3,
+            default_agent_factory=lambda: MockSubAgent(fail=True),
+        )
+        tasks = [
+            SubTask(id="t1", name="t", prompt="p"),
+            SubTask(id="t2", name="t", prompt="p"),
+        ]
+        result = await scheduler.run_parallel(tasks)
+
+        assert len(result.results) == 2
+        assert all(not r.success for r in result.results)
+        assert result.confidence == 0.0
+
+    @pytest.mark.asyncio
+    async def test_custom_aggregator_missing(self):
+        """CUSTOM strategy without aggregator should raise ValueError."""
+        scheduler = TaskScheduler(
+            max_concurrency=3,
+            default_agent_factory=lambda: MockSubAgent(output="data"),
+        )
+        tasks = [SubTask(id="t1", name="t", prompt="p")]
+
+        with pytest.raises(ValueError, match="aggregator"):
+            await scheduler.run_parallel(tasks, strategy=AggregationStrategy.CUSTOM)
+
+    @pytest.mark.asyncio
+    async def test_task_timeout_zero(self):
+        """Zero timeout should still work (immediate fail)."""
+        scheduler = TaskScheduler(
+            max_concurrency=3,
+            default_agent_factory=lambda: MockSubAgent(delay=0.5),
+        )
+        tasks = [SubTask(id="t1", name="t", prompt="p", timeout=0.0)]
+        result = await scheduler.run_parallel(tasks)
+
+        assert not result.results[0].success

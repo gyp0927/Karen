@@ -152,15 +152,15 @@ BASE_URLS = {name: cfg["base_url"] for name, cfg in PROVIDER_CONFIG.items()}
 # ========================================================================
 
 # LangGraph 整体执行超时(秒)。超时后中断流式响应,避免网络或 LLM 挂起。
-GRAPH_TIMEOUT = 60.0
+GRAPH_TIMEOUT = float(os.getenv("KAREN_GRAPH_TIMEOUT", "60.0"))
 
 # Socket 状态不活跃超时(秒)。超过此值的会话会被清理。
-SOCKET_INACTIVE_TIMEOUT = 30 * 60
+SOCKET_INACTIVE_TIMEOUT = int(os.getenv("KAREN_SOCKET_TIMEOUT", str(30 * 60)))
 
 # 服务端 token 批处理阈值:凑齐这么多字符再 emit,减少 socketio 帧数。
 # 值越小响应越"实时"但网络帧数越多;值越大批处理效率越高但用户感觉越"卡"。
 # 本地/低延迟 API 建议 12-20;海外高延迟 API 建议 6-10。
-TOKEN_FLUSH_CHARS = 12
+TOKEN_FLUSH_CHARS = int(os.getenv("KAREN_TOKEN_FLUSH", "12"))
 
 # LLM 响应缓存默认 TTL(秒)。
-CACHE_DEFAULT_TTL = 24 * 3600
+CACHE_DEFAULT_TTL = int(os.getenv("KAREN_CACHE_TTL", str(24 * 3600)))
