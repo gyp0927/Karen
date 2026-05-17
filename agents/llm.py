@@ -169,21 +169,22 @@ def get_llm_provider_model(sid: str = "") -> tuple[str, str]:
 
 
 _cache_key_lru: "dict[int, str]" = {}
+_cache_key_lock = threading.Lock()
 _CACHE_KEY_LRU_MAX = 64
 
 
 def _make_cache_key(kwargs: dict) -> str:
     """构建基于 JSON 的缓存键（带 LRU 缓存，避免重复序列化相同参数）。"""
-    # dict 不可哈希，用 id 做弱引用缓存（同对象复用场景）
     _id = id(kwargs)
-    cached = _cache_key_lru.get(_id)
-    if cached is not None:
-        return cached
+    with _cache_key_lock:
+        cached = _cache_key_lru.get(_id)
+        if cached is not None:
+            return cached
     result = json.dumps(kwargs, sort_keys=True)
-    if len(_cache_key_lru) >= _CACHE_KEY_LRU_MAX:
-        # 简单淘汰：清空一半
-        _cache_key_lru.clear()
-    _cache_key_lru[_id] = result
+    with _cache_key_lock:
+        if len(_cache_key_lru) >= _CACHE_KEY_LRU_MAX:
+            _cache_key_lru.clear()
+        _cache_key_lru[_id] = result
     return result
 
 

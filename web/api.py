@@ -420,9 +420,7 @@ def get_config():
             "apiKey": _mask_api_key(active.get("apiKey", ""))
         }
     from core.config import get_provider, get_model_name
-    from dotenv import load_dotenv
     import os
-    load_dotenv()
     provider = request.args.get("provider", get_provider()).lower()
     key_env_name = f"LLM_API_KEY_{provider.upper().replace('-', '_')}"
     api_key = os.getenv(key_env_name, "")

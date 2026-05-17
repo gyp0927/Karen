@@ -101,7 +101,7 @@ async def get_embedding(text: str, model: str = "text-embedding-3-small") -> Any
     except (requests.RequestException, ConnectionError, TimeoutError) as e:
         logger.warning(f"Embedding request failed: {e}")
         return None
-    except (KeyError, IndexError, json.JSONDecodeError) as e:
+    except (KeyError, IndexError, json.JSONDecodeError, ValueError) as e:
         logger.warning(f"Embedding response parsing failed: {e}")
         return None
 
