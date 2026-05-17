@@ -1,9 +1,14 @@
 """Agent 节点、搜索、缓存、配置、记忆、RAG、模型路由、状态管理测试"""
 
+import os
+
 import pytest
 from langchain_core.messages import HumanMessage
 
+_CI = os.getenv("CI") == "true"
 
+
+@pytest.mark.skipif(_CI, reason="需要 LLM 服务")
 @pytest.mark.asyncio
 async def test_responder():
     from agents.nodes import responder_node
@@ -17,6 +22,7 @@ async def test_responder():
     assert len(result["messages"]) > 0
 
 
+@pytest.mark.skipif(_CI, reason="需要外部网络（DuckDuckGo）")
 @pytest.mark.asyncio
 async def test_web_searcher():
     from agents.search import web_searcher_agent
@@ -25,6 +31,7 @@ async def test_web_searcher():
     assert isinstance(result, str)
 
 
+@pytest.mark.skipif(_CI, reason="需要 embedding 模型")
 @pytest.mark.asyncio
 async def test_memory_searcher():
     from agents.search import memory_searcher_agent
@@ -33,6 +40,7 @@ async def test_memory_searcher():
     assert isinstance(result, str)
 
 
+@pytest.mark.skipif(_CI, reason="需要 embedding 模型")
 @pytest.mark.asyncio
 async def test_knowledge_searcher():
     from agents.search import knowledge_searcher_agent
@@ -80,6 +88,7 @@ async def test_model_name():
     assert len(model) > 0
 
 
+@pytest.mark.skipif(_CI, reason="需要 embedding 模型 + Qdrant")
 @pytest.mark.asyncio
 async def test_memory():
     from core.memory_client import _MEMORY_SYSTEM_AVAILABLE, get_memory_store
@@ -107,6 +116,7 @@ async def test_memory():
     assert isinstance(memories, list)
 
 
+@pytest.mark.skipif(_CI, reason="需要 embedding 模型")
 @pytest.mark.asyncio
 async def test_rag():
     from core.rag import add_document, get_knowledge_stats, search_knowledge

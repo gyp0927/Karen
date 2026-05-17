@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint-and-type:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install ruff mypy pytest pytest-asyncio
+
+      - name: Run ruff check
+        run: ruff check agents/ core/ graph/ web/ tests/
+
+      - name: Run ruff format check
+        run: ruff format --check agents/ core/ graph/ web/ tests/
+
+      - name: Run mypy
+        run: mypy core/ agents/ web/ state/ tools/ cognition/ interface/ --explicit-package-bases --no-error-summary
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+        env:
+          CI: "true"

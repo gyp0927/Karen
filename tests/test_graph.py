@@ -1,7 +1,11 @@
 """图编译测试"""
 
+import os
+
 import pytest
 from langchain_core.messages import HumanMessage
+
+_CI = os.getenv("CI") == "true"
 
 
 @pytest.mark.asyncio
@@ -23,6 +27,7 @@ async def test_coordination_graph():
     assert graph is not None
 
 
+@pytest.mark.skipif(_CI, reason="需要 LLM 服务")
 @pytest.mark.asyncio
 async def test_chat_fast():
     from agents.nodes import responder_node
