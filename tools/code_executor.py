@@ -5,11 +5,18 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import subprocess
 import sys
 import time
 import traceback
 from typing import Optional
+
+try:
+    import resource
+    _RESOURCE_AVAILABLE = True
+except ImportError:
+    _RESOURCE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +178,22 @@ def _check_ast(code: str) -> bool:
     return True
 
 
+def _set_resource_limits(timeout: int):
+    """在子进程中设置 resource limit（Unix only）。"""
+    if not _RESOURCE_AVAILABLE:
+        return
+    try:
+        # CPU 时间限制（硬限制 = 软限制 = timeout）
+        resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
+        # 内存限制 512MB
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+        # 文件句柄限制 64
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+    except (OSError, ValueError) as e:
+        # 某些平台可能不支持某些 limit，忽略错误
+        pass
+
+
 def execute_python(code: str, timeout: int = 30) -> dict:
     """安全执行 Python 代码。
 
@@ -201,9 +224,14 @@ def execute_python(code: str, timeout: int = 30) -> dict:
             "duration_ms": 0,
         }
 
-    # 步骤2: 在子进程中执行（超时保护 + 最小环境变量）
+    # 步骤2: 在子进程中执行（超时保护 + 最小环境变量 + resource limit）
     runner_path = os.path.join(os.path.dirname(__file__), "_code_runner.py")
     start_time = time.time()
+
+    # Windows 平台沙箱能力有限，打 warning 日志
+    if not _RESOURCE_AVAILABLE and platform.system() == "Windows":
+        logger.warning("[WARN] 代码执行在非 Linux 平台上运行，沙箱隔离有限")
+
     # 最小化环境变量，防止通过 env 泄漏敏感信息或利用 PATH 逃逸
     minimal_env = {
         "PYTHONPATH": os.getenv("PYTHONPATH", ""),
@@ -211,14 +239,19 @@ def execute_python(code: str, timeout: int = 30) -> dict:
         "PYTHONDONTWRITEBYTECODE": "1",
         "SYSTEMROOT": os.getenv("SYSTEMROOT", ""),  # Windows 上某些库需要
     }
+    run_kwargs = {
+        "input": code,
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+        "env": minimal_env,
+    }
+    if _RESOURCE_AVAILABLE:
+        run_kwargs["preexec_fn"] = lambda: _set_resource_limits(timeout)
     try:
         proc = subprocess.run(
             [sys.executable, runner_path],
-            input=code,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=minimal_env,
+            **run_kwargs,
         )
         duration_ms = int((time.time() - start_time) * 1000)
 
