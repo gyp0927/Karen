@@ -29,14 +29,14 @@ def _parse_pdf(file_path: str) -> str:
             from pypdf import PdfReader
         except ImportError:
             from PyPDF2 import PdfReader
-        text = ""
+        parts = []
         with open(file_path, "rb") as f:
             reader = PdfReader(f)
             for page in reader.pages:
                 page_text = page.extract_text()
                 if page_text:
-                    text += page_text + "\n"
-        return text.strip() or "[PDF 内容为空或无法提取文本]"
+                    parts.append(page_text)
+        return "\n".join(parts).strip() or "[PDF 内容为空或无法提取文本]"
     except (ImportError, OSError, ValueError) as e:
         return f"[PDF 解析失败: {str(e)}]"
 

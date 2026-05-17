@@ -178,6 +178,24 @@ class PluginRegistry:
             raise ValueError(f"插件 '{name}' 不存在")
         return plugin.execute(args)
 
+    # 插件 AST 扫描的常量集合（类属性，避免每次扫描都重建）
+    _FORBIDDEN_MODULES = frozenset({
+        "os", "sys", "subprocess", "ctypes", "socket",
+        "urllib", "http", "pickle", "marshal", "shutil",
+        "pathlib", "tempfile", "multiprocessing", "builtins",
+        "io", "operator", "inspect", "types", "code", "codeop",
+    })
+    _FORBIDDEN_CALLS = frozenset({
+        "eval", "exec", "compile", "open", "input", "__import__",
+        "getattr", "setattr", "delattr", "globals", "locals", "vars",
+        "attrgetter", "itemgetter", "methodcaller",
+    })
+    _FORBIDDEN_ATTRS = frozenset({
+        "__class__", "__bases__", "__base__", "__subclasses__",
+        "__mro__", "__globals__", "__builtins__", "__dict__",
+        "__code__", "__closure__", "f_globals", "f_locals",
+    })
+
     def _scan_plugin_ast(self, source: str, filepath: str) -> bool:
         """对插件源码进行 AST 安全检查。
 
@@ -188,23 +206,6 @@ class PluginRegistry:
         这是最后一道防线——插件仍然运行在宿主进程中。
         """
         import ast
-
-        _FORBIDDEN_MODULES = {
-            "os", "sys", "subprocess", "ctypes", "socket",
-            "urllib", "http", "pickle", "marshal", "shutil",
-            "pathlib", "tempfile", "multiprocessing", "builtins",
-            "io", "operator", "inspect", "types", "code", "codeop",
-        }
-        _FORBIDDEN_CALLS = {
-            "eval", "exec", "compile", "open", "input", "__import__",
-            "getattr", "setattr", "delattr", "globals", "locals", "vars",
-            "attrgetter", "itemgetter", "methodcaller",
-        }
-        _FORBIDDEN_ATTRS = {
-            "__class__", "__bases__", "__base__", "__subclasses__",
-            "__mro__", "__globals__", "__builtins__", "__dict__",
-            "__code__", "__closure__", "f_globals", "f_locals",
-        }
 
         try:
             tree = ast.parse(source)
@@ -221,22 +222,22 @@ class PluginRegistry:
                     mod = (node.module or "").split(".")[0]
                     names = [mod] if mod else []
                 for name in names:
-                    if name in _FORBIDDEN_MODULES:
+                    if name in self._FORBIDDEN_MODULES:
                         logger.warning(f"Plugin {filepath}: forbidden import '{name}'")
                         return False
 
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
-                    if node.func.id in _FORBIDDEN_CALLS:
+                    if node.func.id in self._FORBIDDEN_CALLS:
                         logger.warning(f"Plugin {filepath}: forbidden call '{node.func.id}'")
                         return False
                 elif isinstance(node.func, ast.Attribute):
-                    if node.func.attr in _FORBIDDEN_CALLS:
+                    if node.func.attr in self._FORBIDDEN_CALLS:
                         logger.warning(f"Plugin {filepath}: forbidden call '{node.func.attr}'")
                         return False
 
             if isinstance(node, ast.Attribute):
-                if node.attr in _FORBIDDEN_ATTRS:
+                if node.attr in self._FORBIDDEN_ATTRS:
                     logger.warning(f"Plugin {filepath}: forbidden attribute '{node.attr}'")
                     return False
 
