@@ -32,11 +32,12 @@ async def test_fast_graph():
     graph = create_fast_graph(responder_node)
     assert graph is not None
 
-@test("图编译 - 审查模式")
-async def test_multi_agent_graph():
-    from graph.orchestrator import create_multi_agent_graph
-    from agents.nodes import coordinator_node, researcher_node, responder_node, reviewer_node
-    graph = create_multi_agent_graph(coordinator_node, researcher_node, responder_node, reviewer_node)
+@test("图编译 - 协调模式")
+async def test_coordination_graph():
+    from graph.orchestrator import create_coordination_graph
+    from agents.nodes import coordinator_node, researcher_node, responder_node
+    from agents.tools import tool_caller_node
+    graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
     assert graph is not None
 
 # ========== 测试 2: Agent 节点 ==========
@@ -228,7 +229,7 @@ async def main():
 
     tests = [
         test_fast_graph,
-        test_multi_agent_graph,
+        test_coordination_graph,
         test_responder,
         test_web_searcher,
         test_memory_searcher,

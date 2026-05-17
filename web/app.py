@@ -343,6 +343,16 @@ def _is_local_address(remote: str) -> bool:
     return False
 
 
+@app.after_request
+def add_security_headers(response):
+    """为所有 HTTP 响应添加安全头，降低 XSS/点击劫持/MIME 嗅探风险。"""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' cdn.jsdelivr.net cdnjs.cloudflare.com unpkg.com; style-src 'self' 'unsafe-inline' cdn.jsdelivr.net cdnjs.cloudflare.com fonts.googleapis.com; font-src 'self' fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:;"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 @app.before_request
 def restrict_local_only():
     path = request.path
