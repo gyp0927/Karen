@@ -61,6 +61,7 @@ class SocketState:
 # 按 socket sid 存储的隔离状态
 socket_states: dict[str, SocketState] = {}
 _socket_states_lock = threading.Lock()
+_MAX_SOCKET_STATES = 1000  # 硬上限，极端高并发场景下兜底
 
 # Socket 级配置隔离：key = socket sid, value = {provider, model, apiKey, baseUrl, name}
 socket_configs = {}
@@ -74,11 +75,25 @@ def get_socket_state(sid: str) -> SocketState:
     """获取或创建指定 socket 的状态（线程安全），并更新活跃时间。"""
     with _socket_states_lock:
         if sid not in socket_states:
+            # 硬上限兜底：超过限制时驱逐最久未活跃的 socket
+            if len(socket_states) >= _MAX_SOCKET_STATES:
+                _evict_oldest_socket_states(10)
             socket_states[sid] = SocketState(sid)
             logger.info(f"Created socket state for sid={sid}")
         state = socket_states[sid]
         state.touch()
         return state
+
+
+def _evict_oldest_socket_states(count: int) -> None:
+    """驱逐最久未活跃的 socket 状态。调用方需持有 _socket_states_lock。"""
+    if len(socket_states) <= 0:
+        return
+    # 按 last_active 升序排序，移除最老的
+    sorted_sids = sorted(socket_states.keys(), key=lambda s: socket_states[s].last_active)
+    for old_sid in sorted_sids[:count]:
+        socket_states.pop(old_sid, None)
+        logger.warning(f"Socket state evicted due to hard limit: sid={old_sid}")
 
 
 def cleanup_socket(sid: str):
