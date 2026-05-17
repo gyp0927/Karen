@@ -75,6 +75,7 @@ def _get_admin_password() -> str:
     os.makedirs(_DB_DIR, exist_ok=True)
     with open(_ADMIN_PASSWORD_FILE, "w", encoding="utf-8") as f:
         f.write(random_pwd)
+    logger.warning(f"[INIT] 管理员密码已随机生成: {random_pwd}")
     return random_pwd
 
 
