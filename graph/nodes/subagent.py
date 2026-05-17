@@ -344,7 +344,8 @@ async def subagent_node(state: dict, sid: str | None = None) -> dict:
     query = ""
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
-            query = msg.content or ""
+            content = msg.content
+            query = content if isinstance(content, str) else ""
             break
 
     if not query:
