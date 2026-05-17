@@ -55,8 +55,30 @@ _auth_purge_counter = 0
 
 # 默认管理员配置（首次启动且用户表为空时自动创建）
 _DEFAULT_ADMIN_NAME = os.getenv("DEFAULT_ADMIN_NAME", "admin")
-_DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
 _DEFAULT_ADMIN_API_KEY = os.getenv("DEFAULT_ADMIN_API_KEY", "karen-admin-default-key")
+
+# 默认密码：优先从环境变量读取，其次从持久化文件读取，最后随机生成。
+# 随机生成时会写入 data/.admin_password 并打印到控制台，避免硬编码弱密码。
+_ADMIN_PASSWORD_FILE = os.path.join(_DB_DIR, ".admin_password")
+
+
+def _get_admin_password() -> str:
+    """获取管理员密码（环境变量 > 持久化文件 > 随机生成）。"""
+    env_pwd = os.getenv("DEFAULT_ADMIN_PASSWORD")
+    if env_pwd:
+        return env_pwd
+    if os.path.exists(_ADMIN_PASSWORD_FILE):
+        with open(_ADMIN_PASSWORD_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    # 生成随机密码并持久化
+    random_pwd = secrets.token_urlsafe(16)
+    os.makedirs(_DB_DIR, exist_ok=True)
+    with open(_ADMIN_PASSWORD_FILE, "w", encoding="utf-8") as f:
+        f.write(random_pwd)
+    return random_pwd
+
+
+_DEFAULT_ADMIN_PASSWORD = _get_admin_password()
 
 
 def _purge_expired_failures(now: float) -> None:

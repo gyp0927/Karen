@@ -74,8 +74,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# SECRET_KEY：环境变量 > 持久化文件 > 随机生成并持久化。
+# 避免每次重启后 session 全部失效，也支持多实例共享。
+_SECRET_KEY_FILE = os.path.join(os.path.dirname(__file__), "..", "data", ".secret_key")
+
+
+def _get_secret_key() -> str:
+    env_key = os.getenv("FLASK_SECRET_KEY")
+    if env_key:
+        return env_key
+    if os.path.exists(_SECRET_KEY_FILE):
+        with open(_SECRET_KEY_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    key = secrets.token_hex(32)
+    os.makedirs(os.path.dirname(_SECRET_KEY_FILE), exist_ok=True)
+    with open(_SECRET_KEY_FILE, "w", encoding="utf-8") as f:
+        f.write(key)
+    return key
+
+
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(32))
+app.config["SECRET_KEY"] = _get_secret_key()
 # 限制上传体积,防止磁盘被恶意大文件耗尽
 app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
 
