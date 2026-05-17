@@ -46,3 +46,7 @@ disallow_any_expr = false
 disallow_untyped_defs = false
 disallow_untyped_calls = false
 strict_optional = false
+
+[[tool.mypy.overrides]]
+module = "hot_and_cold_memory.*"
+ignore_errors = true

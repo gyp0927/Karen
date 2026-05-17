@@ -182,12 +182,11 @@ def _set_resource_limits(timeout: int):
     if not _RESOURCE_AVAILABLE:
         return
     try:
-        # CPU 时间限制（硬限制 = 软限制 = timeout）
-        resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))  # type: ignore[attr-defined]
-        # 内存限制 512MB
-        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))  # type: ignore[attr-defined]
-        # 文件句柄限制 64
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))  # type: ignore[attr-defined]
+        # 使用 getattr 避免 Windows 上 mypy 报 attr-defined 又导致 Linux CI 报 unused-ignore
+        setrlimit = getattr(resource, "setrlimit")
+        setrlimit(getattr(resource, "RLIMIT_CPU"), (timeout, timeout))
+        setrlimit(getattr(resource, "RLIMIT_AS"), (512 * 1024 * 1024, 512 * 1024 * 1024))
+        setrlimit(getattr(resource, "RLIMIT_NOFILE"), (64, 64))
     except (OSError, ValueError):
         # 某些平台可能不支持某些 limit，忽略错误
         pass

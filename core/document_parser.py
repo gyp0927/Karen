@@ -24,9 +24,10 @@ def _parse_pdf(file_path: str) -> str:
     兼容旧环境时回退到 PyPDF2。"""
     try:
         try:
-            from pypdf import PdfReader
+            from pypdf import PdfReader as _PdfReader
         except ImportError:
-            from PyPDF2 import PdfReader
+            from PyPDF2 import PdfReader as _PdfReader
+        PdfReader = _PdfReader
         parts = []
         with open(file_path, "rb") as f:
             reader = PdfReader(f)
