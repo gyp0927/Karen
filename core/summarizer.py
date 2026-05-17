@@ -1,6 +1,7 @@
 """对话自动摘要 - 长对话时自动压缩历史消息，减少 token 消耗。"""
 
 import logging
+import re
 from typing import Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
@@ -89,7 +90,6 @@ class ConversationSummarizer:
                     topics.append(topic)
             elif isinstance(msg, AIMessage):
                 # 尝试提取关键事实（包含数字、日期的句子）
-                import re
                 facts = re.findall(r'[^。！?.]+(?:\d{4}|\d+%|第[一二三四五]|首先|关键|重要)[^。！?.]*[。！?.]?', content)
                 key_facts.extend(facts[:2])  # 每条 AI 消息最多取 2 个事实
 

@@ -135,12 +135,20 @@ async def run_parallel_search(state: dict) -> str:
     # 的 route 回复被当成查询（协调模式下 messages[-1] 是 AIMessage）。
     from langchain_core.messages import HumanMessage
     user_message = ""
-    for msg in reversed(state.get("messages", [])):
-        if isinstance(msg, HumanMessage):
-            user_message = msg.content
-            break
+    msgs = state.get("messages", [])
+    if msgs:
+        # 最后一条通常是用户消息（快速模式），直接检查避免遍历
+        last_msg = msgs[-1]
+        if isinstance(last_msg, HumanMessage):
+            user_message = last_msg.content
+        else:
+            # 回退：反向遍历找最近的用户消息
+            for msg in reversed(msgs):
+                if isinstance(msg, HumanMessage):
+                    user_message = msg.content
+                    break
     if not user_message:
-        user_message = state["messages"][-1].content if state.get("messages") else ""
+        user_message = msgs[-1].content if msgs else ""
 
     mode = state.get("task_context", {}).get("mode", "coordination")
     user_id = state.get("task_context", {}).get("user_id", "")
