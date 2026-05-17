@@ -56,26 +56,19 @@ from state.stats import CallRecord, estimate_cost, get_daily_stats, get_stats_su
 from state.stop_flag import clear_stop, is_stopped, set_stop
 from web.state import (
     SocketState,
+    _confirmations_lock,
     _socket_configs_lock,
     _socket_states_lock,
     cleanup_socket,
     get_socket_state,
     has_valid_config,
     init_agents,
+    pending_tool_confirmations,
     socket_configs,
     socket_states,
     start_socket_cleanup,
 )
 from web.utils import run_async_in_thread
-
-# 模块级预检查 tiktoken：避免每次消息处理都重复 try/import
-_tiktoken_enc = None
-try:
-    import tiktoken
-
-    _tiktoken_enc = tiktoken.get_encoding("cl100k_base")
-except Exception:
-    pass
 
 # 配置日志（可通过环境变量 LOG_LEVEL 调整，默认 INFO）
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -85,6 +78,15 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# 模块级预检查 tiktoken：避免每次消息处理都重复 try/import
+_tiktoken_enc = None
+try:
+    import tiktoken
+
+    _tiktoken_enc = tiktoken.get_encoding("cl100k_base")
+except Exception as _e:
+    logger.warning(f"tiktoken not available: {_e}")
 
 # SECRET_KEY：环境变量 > 持久化文件 > 随机生成并持久化。
 # 避免每次重启后 session 全部失效，也支持多实例共享。
@@ -253,8 +255,8 @@ def upload_to_rag():
                 if os.path.exists(file_path):
                     os.remove(file_path)
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            except OSError:
-                pass
+            except OSError as _e:
+                logger.debug(f"Failed to cleanup temp file: {_e}")
     except Exception as e:
         logger.exception("RAG upload failed")
         return {"success": False, "message": f"上传失败: {str(e)}"}, 500
@@ -701,6 +703,52 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 始终使用快速模式图
     graph = _web_state.fast_graph
 
+    # === 工具执行确认回调注册 ===
+    # 危险工具（如 execute_python）执行前需要用户显式确认
+    from cognition.tool_engine import (
+        register_tool_confirmation_handler,
+        unregister_tool_confirmation_handler,
+    )
+
+    _confirm_event = asyncio.Event()
+    _confirm_result = {"confirmed": False}
+
+    async def _tool_confirm_handler(tool_sid: str, tool_name: str, tool_args: dict) -> bool:
+        confirm_id = f"{tool_sid}:{tool_name}:{time.time():.6f}"
+        with _confirmations_lock:
+            pending_tool_confirmations[confirm_id] = {
+                "sid": tool_sid,
+                "tool_name": tool_name,
+                "tool_args": tool_args,
+                "event": _confirm_event,
+                "result": _confirm_result,
+            }
+        # 发送确认请求到前端（只展示代码摘要，不展示完整代码）
+        code_preview = ""
+        if "code" in tool_args:
+            raw_code = str(tool_args["code"])
+            code_preview = raw_code[:100] + "..." if len(raw_code) > 100 else raw_code
+        _safe_emit(
+            "tool_confirmation_required",
+            {
+                "confirm_id": confirm_id,
+                "tool_name": tool_name,
+                "code_preview": code_preview,
+            },
+        )
+        try:
+            # 等待用户响应，最多 60 秒
+            await asyncio.wait_for(_confirm_event.wait(), timeout=60.0)
+            return _confirm_result["confirmed"]
+        except TimeoutError:
+            logger.warning(f"[ToolConfirm] 用户确认超时: {tool_name} for sid={tool_sid}")
+            return False
+        finally:
+            with _confirmations_lock:
+                pending_tool_confirmations.pop(confirm_id, None)
+
+    register_tool_confirmation_handler(sid, _tool_confirm_handler)
+
     # 安全 emit：后台线程中请求上下文可能丢失，使用 socketio.emit 代替
     def _safe_emit(event, data):
         try:
@@ -773,96 +821,112 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         clear_stop(sid)
         _safe_emit("stream_end", {"message": "⏱️ 响应超时，请重试或简化问题。", "awaiting_review": False})
         _safe_emit("error", {"message": "⏱️ 响应超时，请重试或简化问题。"})
-        return
     except Exception as e:
         logger.exception(f"Error processing message for sid={sid}")
         clear_streaming_callback(sid)
         clear_stop(sid)
         _safe_emit("stream_end", {"message": f"❌ 处理出错: {str(e)}", "awaiting_review": False})
         _safe_emit("message_failed", {"message": user_message, "error": str(e)})
-        return
-
-    # === 图执行成功后的处理 ===
-    # 用户消息已在发送时保存，这里只保存 AI 回复
-
-    # 1. 记录 API 调用统计
-    _record_api_stats(sid, messages_for_llm, final_state, expected_session_id, call_start)
-
-    if is_stopped(sid):
-        # 清理流式占位符，避免用户看到未完成的"正在搜索..."
-        if _stream_started:
-            _safe_emit("stream_end", {"message": "（生成已停止）", "awaiting_review": False})
-        _safe_emit("generation_stopped", {"message": "生成已停止"})
-        return
-
-    if final_state is None:
-        clear_streaming_callback(sid)
-        if _stream_started:
-            _safe_emit("stream_end", {"message": "未生成回复", "awaiting_review": False})
-        _safe_emit("error", {"message": "No response generated"})
-        return
-
-    # 清理流式回调
-    clear_streaming_callback(sid)
-
-    # 会话隔离检查
-    if state.msg_manager.get_current_session_id() != expected_session_id:
-        logger.info(f"Session changed during generation, discarding result for sid={sid}")
-        return
-
-    # 提取 AI 回复：从后往前找最后一条 AIMessage（Responder 的输出）
-    base_response = ""
-    for msg in reversed(final_state.get("messages", [])):
-        if isinstance(msg, AIMessage):
-            base_response = cast(str, msg.content) or ""
-            break
-
-    state.current_base_response = base_response
-
-    # 仅在有内容或前端已经收到 stream_start 时发结束帧,否则前端会收到孤立 stream_end。
-    if base_response or _stream_started:
-        _flush_pending_tokens()  # 把缓冲区残留 token 先发完，避免最后一段突然出现
-        _safe_emit("stream_end", {"message": base_response, "awaiting_review": True})
     else:
-        _safe_emit("error", {"message": "No response generated"})
+        # === 图执行成功后的处理 ===
+        # 用户消息已在发送时保存，这里只保存 AI 回复
 
-    # 避免保存空响应到历史记录
-    if base_response:
-        state.msg_manager.add_agent_message(base_response, "base_model")
+        # 1. 记录 API 调用统计
+        _record_api_stats(sid, messages_for_llm, final_state, expected_session_id, call_start)
 
-    # === 保存对话记忆到自适应记忆系统（后台 fire-and-forget，不阻塞 UI） ===
-    # source=session_id 是为了让 delete_session 能 cascade 清掉本会话的记忆,
-    # 不影响其他会话。user_id 退到 tags 里保留追踪能力。
-    if _MEMORY_SYSTEM_AVAILABLE:
+        if is_stopped(sid):
+            # 清理流式占位符，避免用户看到未完成的"正在搜索..."
+            if _stream_started:
+                _safe_emit("stream_end", {"message": "（生成已停止）", "awaiting_review": False})
+            _safe_emit("generation_stopped", {"message": "生成已停止"})
+        elif final_state is None:
+            clear_streaming_callback(sid)
+            if _stream_started:
+                _safe_emit("stream_end", {"message": "未生成回复", "awaiting_review": False})
+            _safe_emit("error", {"message": "No response generated"})
+        elif state.msg_manager.get_current_session_id() != expected_session_id:
+            logger.info(f"Session changed during generation, discarding result for sid={sid}")
+        else:
+            # 清理流式回调
+            clear_streaming_callback(sid)
 
-        async def _save_conversation_memories():
-            try:
-                store = get_memory_store()
-                user_tag = f"user_{state.user_id}" if state.user_id else f"sid_{sid}"
-                # 保存用户输入作为 observation
-                await store.save_memory(
-                    content=f"用户说: {user_message}",
-                    memory_type="observation",
-                    source=expected_session_id,
-                    importance=0.4,
-                    tags=["user_input", user_tag],
+            # 提取 AI 回复：从后往前找最后一条 AIMessage（Responder 的输出）
+            base_response = ""
+            for msg in reversed(final_state.get("messages", [])):
+                if isinstance(msg, AIMessage):
+                    base_response = cast(str, msg.content) or ""
+                    break
+
+            state.current_base_response = base_response
+
+            # 仅在有内容或前端已经收到 stream_start 时发结束帧,否则前端会收到孤立 stream_end。
+            if base_response or _stream_started:
+                _flush_pending_tokens()  # 把缓冲区残留 token 先发完，避免最后一段突然出现
+                _safe_emit("stream_end", {"message": base_response, "awaiting_review": True})
+            else:
+                _safe_emit("error", {"message": "No response generated"})
+
+            # 避免保存空响应到历史记录
+            if base_response:
+                state.msg_manager.add_agent_message(base_response, "base_model")
+
+            # === 保存对话记忆到自适应记忆系统（后台 fire-and-forget，不阻塞 UI） ===
+            # source=session_id 是为了让 delete_session 能 cascade 清掉本会话的记忆,
+            # 不影响其他会话。user_id 退到 tags 里保留追踪能力。
+            if _MEMORY_SYSTEM_AVAILABLE:
+
+                async def _save_conversation_memories():
+                    try:
+                        store = get_memory_store()
+                        user_tag = f"user_{state.user_id}" if state.user_id else f"sid_{sid}"
+                        # 保存用户输入作为 observation
+                        await store.save_memory(
+                            content=f"用户说: {user_message}",
+                            memory_type="observation",
+                            source=expected_session_id,
+                            importance=0.4,
+                            tags=["user_input", user_tag],
+                        )
+                        # 保存 AI 回复作为 observation
+                        await store.save_memory(
+                            content=f"AI回复: {base_response[:500]}",
+                            memory_type="observation",
+                            source=expected_session_id,
+                            importance=0.3,
+                            tags=["ai_response", user_tag],
+                        )
+                        logger.debug(f"Conversation memories saved for sid={sid} session={expected_session_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to save conversation memory: {e}")
+
+                task = asyncio.create_task(_save_conversation_memories())
+                task.add_done_callback(
+                    lambda t: logger.warning(f"Save memory task failed: {t.exception()}") if t.exception() else None
                 )
-                # 保存 AI 回复作为 observation
-                await store.save_memory(
-                    content=f"AI回复: {base_response[:500]}",
-                    memory_type="observation",
-                    source=expected_session_id,
-                    importance=0.3,
-                    tags=["ai_response", user_tag],
-                )
-                logger.debug(f"Conversation memories saved for sid={sid} session={expected_session_id}")
-            except Exception as e:
-                logger.warning(f"Failed to save conversation memory: {e}")
+    finally:
+        # 注销工具确认回调（避免内存泄漏和过期回调被触发）
+        unregister_tool_confirmation_handler(sid)
 
-        task = asyncio.create_task(_save_conversation_memories())
-        task.add_done_callback(
-            lambda t: logger.warning(f"Save memory task failed: {t.exception()}") if t.exception() else None
-        )
+
+@socketio.on("confirm_tool_execution")
+@socketio_auth_required
+def handle_confirm_tool_execution(data):
+    """用户确认或拒绝执行危险工具。"""
+    sid = request.sid
+    confirm_id = data.get("confirm_id", "")
+    confirmed = bool(data.get("confirmed", False))
+
+    with _confirmations_lock:
+        pending = pending_tool_confirmations.get(confirm_id)
+
+    if pending and pending.get("sid") == sid:
+        pending["result"]["confirmed"] = confirmed
+        pending["event"].set()
+        emit("tool_confirmation_ack", {"confirm_id": confirm_id, "confirmed": confirmed})
+        logger.info(f"[ToolConfirm] 用户{'确认' if confirmed else '拒绝'}执行工具: {pending.get('tool_name')} for sid={sid}")
+    else:
+        emit("error", {"message": "确认请求已过期或无效"})
+        logger.warning(f"[ToolConfirm] 无效或已过期的确认请求: confirm_id={confirm_id} sid={sid}")
 
 
 @socketio.on("trigger_review")
@@ -912,8 +976,8 @@ async def _async_handle_review(sid: str, expected_session_id: str):
                 if sid not in socket_states:
                     return
             socketio.emit(event, data, room=sid)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"Failed to emit review event to {sid}: {_e}")
 
     try:
         # 构建审查提示

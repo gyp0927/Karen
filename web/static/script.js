@@ -58,6 +58,12 @@ const fileAttachment = document.getElementById("fileAttachment");
 const fileAttachmentName = document.getElementById("fileAttachmentName");
 const fileAttachmentRemove = document.getElementById("fileAttachmentRemove");
 
+// Tool Confirmation Dialog DOM
+const toolConfirmOverlay = document.getElementById("toolConfirmOverlay");
+const toolConfirmCode = document.getElementById("toolConfirmCode");
+const toolConfirmAllow = document.getElementById("toolConfirmAllow");
+const toolConfirmDeny = document.getElementById("toolConfirmDeny");
+
 // State
 let isProcessing = false;
 let awaitingReview = false;
@@ -1062,6 +1068,56 @@ socket.on("generation_stopped", (data) => {
 socket.on("generation_stopping", (data) => {
   showToast("正在停止...", "info");
 });
+
+// 当前待确认的工具执行请求 ID
+let _pendingToolConfirmId = null;
+
+socket.on("tool_confirmation_required", (data) => {
+  _pendingToolConfirmId = data.confirm_id;
+  if (toolConfirmCode) {
+    toolConfirmCode.textContent = data.code_preview || "（无代码预览）";
+  }
+  if (toolConfirmOverlay) {
+    toolConfirmOverlay.style.display = "flex";
+  }
+});
+
+socket.on("tool_confirmation_ack", (data) => {
+  _pendingToolConfirmId = null;
+  if (toolConfirmOverlay) {
+    toolConfirmOverlay.style.display = "none";
+  }
+});
+
+// 工具确认对话框按钮事件
+if (toolConfirmAllow) {
+  toolConfirmAllow.addEventListener("click", () => {
+    if (_pendingToolConfirmId) {
+      socket.emit("confirm_tool_execution", {
+        confirm_id: _pendingToolConfirmId,
+        confirmed: true,
+      });
+      _pendingToolConfirmId = null;
+    }
+    if (toolConfirmOverlay) {
+      toolConfirmOverlay.style.display = "none";
+    }
+  });
+}
+if (toolConfirmDeny) {
+  toolConfirmDeny.addEventListener("click", () => {
+    if (_pendingToolConfirmId) {
+      socket.emit("confirm_tool_execution", {
+        confirm_id: _pendingToolConfirmId,
+        confirmed: false,
+      });
+      _pendingToolConfirmId = null;
+    }
+    if (toolConfirmOverlay) {
+      toolConfirmOverlay.style.display = "none";
+    }
+  });
+}
 
 // ============ Event Handlers ============
 

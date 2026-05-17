@@ -19,6 +19,24 @@ logger = logging.getLogger(__name__)
 # 代码执行默认关闭,需显式开启 ENABLE_CODE_EXECUTION=true
 _CODE_EXEC_ENABLED = os.getenv("ENABLE_CODE_EXECUTION", "false").lower() in ("true", "1", "yes")
 
+# 危险工具列表：执行前需要用户显式确认
+_DANGEROUS_TOOLS: set[str] = {"execute_python"}
+
+# 工具确认回调注册表: sid -> callback
+# callback 签名: async (sid: str, tool_name: str, tool_args: dict) -> bool
+# 返回 True 表示用户确认执行,False 表示拒绝
+_confirmation_handlers: dict[str, Callable[[str, str, dict], Any]] = {}
+
+
+def register_tool_confirmation_handler(sid: str, handler: Callable[[str, str, dict], Any]) -> None:
+    """注册指定 sid 的工具确认处理函数。"""
+    _confirmation_handlers[sid] = handler
+
+
+def unregister_tool_confirmation_handler(sid: str) -> None:
+    """注销指定 sid 的工具确认处理函数。"""
+    _confirmation_handlers.pop(sid, None)
+
 
 # ========== 工具定义 ==========
 
@@ -138,11 +156,12 @@ def get_available_tools() -> list[BaseTool]:
     return list(DEFAULT_TOOLS)
 
 
-async def execute_tool_call(tool_call: dict) -> str:
+async def execute_tool_call(tool_call: dict, available_tools: list[BaseTool] | None = None) -> str:
     """执行单个 tool_call 并返回结果字符串。
 
     Args:
         tool_call: {"name": str, "args": dict, "id": str, ...}
+        available_tools: 可选的额外工具列表（覆盖或扩展 DEFAULT_TOOLS）
 
     Returns:
         工具执行结果文本
@@ -150,8 +169,11 @@ async def execute_tool_call(tool_call: dict) -> str:
     tool_name = tool_call.get("name", "")
     tool_args = tool_call.get("args", {})
 
+    # 合并工具列表：优先从 available_tools 查找，再回退到 DEFAULT_TOOLS
+    tool_registry = list(available_tools) if available_tools else list(DEFAULT_TOOLS)
+
     # 查找匹配的工具
-    for t in DEFAULT_TOOLS:
+    for t in tool_registry:
         if t.name == tool_name:
             try:
                 logger.info(f"[Tool] 执行 {tool_name}({tool_args})")
@@ -210,15 +232,47 @@ async def run_tool_loop(
         # 添加 LLM 的 tool_calls 消息到上下文
         current_messages.append(response)
 
-        # 并行执行所有工具调用
+        # 并行执行所有工具调用（危险工具需用户确认）
         tool_tasks = []
         for tc in response.tool_calls:
-            tool_tasks.append(execute_tool_call(tc))
+            tool_name = tc.get("name", "")
+            tool_args = tc.get("args", {})
+
+            # 危险工具：需要用户确认
+            if tool_name in _DANGEROUS_TOOLS and sid:
+                handler = _confirmation_handlers.get(sid)
+                if handler:
+                    try:
+                        confirmed = await handler(sid, tool_name, tool_args)
+                        if not confirmed:
+                            logger.warning(f"[ToolLoop] 用户拒绝执行危险工具: {tool_name}")
+                            tool_tasks.append(asyncio.sleep(0))
+                            # 用占位标记，后续替换为拒绝消息
+                            tool_tasks[-1]._tool_call = tc  # type: ignore[attr-defined]
+                            tool_tasks[-1]._rejected = True  # type: ignore[attr-defined]
+                            continue
+                    except Exception as e:
+                        logger.warning(f"[ToolLoop] 确认回调异常，拒绝执行: {e}")
+                        tool_tasks.append(asyncio.sleep(0))
+                        tool_tasks[-1]._tool_call = tc  # type: ignore[attr-defined]
+                        tool_tasks[-1]._rejected = True  # type: ignore[attr-defined]
+                        continue
+                else:
+                    logger.warning(f"[ToolLoop] 无确认处理器，拒绝执行危险工具: {tool_name}")
+                    tool_tasks.append(asyncio.sleep(0))
+                    tool_tasks[-1]._tool_call = tc  # type: ignore[attr-defined]
+                    tool_tasks[-1]._rejected = True  # type: ignore[attr-defined]
+                    continue
+
+            tool_tasks.append(execute_tool_call(tc, available_tools=tools))
 
         tool_results = await asyncio.gather(*tool_tasks, return_exceptions=True)
 
         # 添加工具结果到上下文
-        for tc, result in zip(response.tool_calls, tool_results):
+        for i, (tc, result) in enumerate(zip(response.tool_calls, tool_results)):
+            task = tool_tasks[i]
+            if getattr(task, "_rejected", False):
+                result = "[工具执行被拒绝: 用户未确认执行该操作]"
             if isinstance(result, Exception):
                 result = f"[工具执行异常: {result}]"
             current_messages.append(ToolMessage(

@@ -211,6 +211,25 @@
     </div>
   </div>
 
+  <!-- Tool Execution Confirmation Dialog -->
+  <div class="config-prompt-overlay" id="toolConfirmOverlay" style="display: none;">
+    <div class="config-prompt-box" style="max-width: 480px; text-align: left;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <div class="config-prompt-icon">&#9888;&#65039;</div>
+        <div class="config-prompt-title">安全确认</div>
+        <div class="config-prompt-desc">AI 请求执行以下代码，请确认是否允许</div>
+      </div>
+      <div style="margin-bottom: 16px;">
+        <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">代码预览：</div>
+        <pre id="toolConfirmCode" style="background: var(--code-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; font-size: 13px; overflow-x: auto; max-height: 200px; white-space: pre-wrap; word-break: break-all; color: var(--text-primary);"></pre>
+      </div>
+      <div style="display: flex; gap: 10px; margin-top: 20px;">
+        <button class="config-prompt-btn secondary" id="toolConfirmDeny" style="flex: 1;">拒绝执行</button>
+        <button class="config-prompt-btn primary" id="toolConfirmAllow" style="flex: 1;">允许执行</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Extensions Panel -->
   <div class="config-prompt-overlay" id="extensionsOverlay" style="display: none;">
     <div class="config-prompt-box" style="max-width: 520px; text-align: left; max-height: 80vh; overflow-y: auto;">

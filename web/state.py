@@ -20,6 +20,10 @@ from state.stop_flag import cleanup_sid, set_stop
 
 logger = logging.getLogger(__name__)
 
+# 工具执行确认机制：危险工具（如代码执行）需要用户显式确认
+pending_tool_confirmations: dict[str, dict] = {}
+_confirmations_lock = threading.Lock()
+
 
 class SocketState:
     """每个 Socket 连接的隔离状态"""

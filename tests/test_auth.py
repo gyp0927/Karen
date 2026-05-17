@@ -96,6 +96,7 @@ def test_rate_limit_expired_cleanup():
 
     # 手动将记录设为过期
     import time
+
     old_time = time.time() - 3601  # 超过 BLOCK 窗口
     _auth_failures[ip] = [old_time for _ in range(10)]
 
