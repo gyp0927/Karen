@@ -57,9 +57,11 @@ def create_coordination_graph(coordinator_agent, researcher_agent, tool_caller, 
     workflow.set_entry_point("coordinator")
 
     def _route_after_coordinator(state: AgentState) -> str:
-        """解析 Coordinator 的输出，决定是否需要搜索。"""
+        """解析 Coordinator 的输出，决定是否需要搜索或子 Agent 委派。"""
         for msg in reversed(state.get("messages", [])):
             content = getattr(msg, "content", "")
+            if "[route: subagent]" in content:
+                return "subagent"
             if "[route: responder]" in content:
                 return "responder"
             if "[route: researcher]" in content:
@@ -73,6 +75,7 @@ def create_coordination_graph(coordinator_agent, researcher_agent, tool_caller, 
         {
             "researcher": "researcher",
             "responder": "responder",
+            "subagent": "responder",
         },
     )
 

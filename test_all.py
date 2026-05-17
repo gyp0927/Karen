@@ -254,6 +254,39 @@ async def test_skill_intent_integration():
 
 
 # ========== 测试 11: 端到端聊天（快速模式）==========
+@test("子 Agent - 调度器并发")
+async def test_subagent_scheduler():
+    from core.subagent.scheduler import TaskScheduler
+    from core.subagent.base import SubTask
+
+    scheduler = TaskScheduler(max_concurrency=2, default_agent_factory=lambda: None)
+    assert scheduler.max_concurrency == 2
+
+
+@test("子 Agent - 聚合器代码审查")
+async def test_subagent_aggregator():
+    from core.subagent.aggregator import merge_code_reviews
+    from core.subagent.base import SubTaskResult
+
+    results = [
+        SubTaskResult(task_id="sec", success=True, output="- P0 app.py:1 - SQL注入"),
+        SubTaskResult(task_id="perf", success=True, output="- P1 app.py:2 - 低效循环"),
+    ]
+    output = merge_code_reviews(results)
+    assert "P0" in output
+    assert "SQL注入" in output
+
+
+@test("子 Agent - 场景检测")
+async def test_subagent_scenario():
+    from graph.nodes.subagent import _detect_scenario
+    from langchain_core.messages import HumanMessage
+
+    messages = [HumanMessage(content="深入研究一下AI")]
+    scenario = _detect_scenario("深入研究一下AI", messages)
+    assert scenario == "research"
+
+
 @test("端到端 - 快速模式")
 async def test_chat_fast():
     from graph.orchestrator import create_fast_graph
@@ -328,6 +361,9 @@ async def main():
         test_skill_loader,
         test_skill_trigger_match,
         test_skill_intent_integration,
+        test_subagent_scheduler,
+        test_subagent_aggregator,
+        test_subagent_scenario,
         test_chat_fast,
     ]
 

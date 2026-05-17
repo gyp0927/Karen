@@ -644,6 +644,19 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
             state = dict(state)
             state["messages"] = list(state.get("messages", [])) + [search_msg]
 
+    # ---- 子 Agent 并行分析 ----
+    try:
+        from graph.nodes.subagent import subagent_node as _subagent_node
+
+        subagent_result = await _subagent_node(state, sid)
+        if subagent_result.get("messages"):
+            subagent_msg = subagent_result["messages"][0]
+            state = dict(state)
+            state["messages"] = list(state.get("messages", [])) + [subagent_msg]
+            logger.info(f"[responder] Subagent analysis injected: {getattr(subagent_msg, 'name', 'subagent')}")
+    except Exception as e:
+        logger.warning(f"[responder] Subagent execution failed: {e}")
+
     # ---- 工具调用判断（用原始 query，不能用注入搜索后的 messages[-1]）----
     tools = None
     if _need_tool_call(original_query):
