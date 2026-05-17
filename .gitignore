@@ -46,10 +46,14 @@ state/*.db
 state/*.sqlite
 state/*.sqlite3
 *.db
+*.db-journal
 *.sqlite
 *.sqlite3
 qdrant_storage/
 state/model_configs.json
+data/.secret_key
+data/.admin_password
+.app.lock
 
 # 构建产物
 *.spec
