@@ -1,6 +1,5 @@
 """Tests for skill system."""
 
-
 from core.skills.loader import SkillLoader
 
 
