@@ -6,6 +6,7 @@ import re
 import time
 import asyncio
 import threading
+import unicodedata
 from dataclasses import asdict
 from typing import Optional, Callable
 
@@ -137,7 +138,6 @@ def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
     # 覆盖 CJK 统一表意文字基本区 + 扩展 A-G 区（通过 unicodedata.category）
-    import unicodedata
     chinese_chars = sum(1 for c in text if unicodedata.category(c) == 'Lo')
     non_chinese = len(text) - chinese_chars
     return max(1, chinese_chars + non_chinese // 4)

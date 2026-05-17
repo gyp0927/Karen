@@ -3,6 +3,12 @@ import re
 import threading
 from typing import Callable
 
+# 预编译 detect_language 中使用的正则，避免每次调用重复编译
+_DETECT_LANG_CLEAN_RE = re.compile(r"[\s\.\,\!\?\;\:\'\"\(\)\[\]\{\}\\/\-\_\@\#\$\%\&\*\+\=\|\<\>\`\~]")
+_DETECT_LANG_ZH_RE = re.compile(r"[一-鿿]")
+_DETECT_LANG_JA_RE = re.compile(r"[぀-ゟ゠-ヿ]")
+_DETECT_LANG_KO_RE = re.compile(r"[가-힯]")
+
 
 def detect_language(text: str) -> str:
     """检测文本的主要语言。返回 'zh', 'en', 'ja', 'ko' 等 ISO 代码。
@@ -17,13 +23,13 @@ def detect_language(text: str) -> str:
     if not text or not text.strip():
         return "zh"
 
-    cleaned = re.sub(r"[\s\.\,\!\?\;\:\'\"\(\)\[\]\{\}\\/\-\_\@\#\$\%\&\*\+\=\|\<\>\`\~]", "", text)
+    cleaned = _DETECT_LANG_CLEAN_RE.sub("", text)
     if not cleaned:
         return "zh"
 
-    zh_chars = len(re.findall(r"[一-鿿]", cleaned))
-    ja_chars = len(re.findall(r"[぀-ゟ゠-ヿ]", cleaned))
-    ko_chars = len(re.findall(r"[가-힯]", cleaned))
+    zh_chars = len(_DETECT_LANG_ZH_RE.findall(cleaned))
+    ja_chars = len(_DETECT_LANG_JA_RE.findall(cleaned))
+    ko_chars = len(_DETECT_LANG_KO_RE.findall(cleaned))
     total = len(cleaned)
 
     if total == 0:

@@ -192,19 +192,23 @@ def _try_ddg_library(query: str, max_results: int, timeout: int = _SEARCH_TIMEOU
 
 # ========== 2. 360 搜索（国内可访问）==========
 
+# 预编译 360 搜索 HTML 解析正则（避免每次调用重复编译）
+_360_PATTERNS = [
+    re.compile(r'<h3[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?</h3>', re.IGNORECASE | re.DOTALL),
+    re.compile(r'<a[^>]+data-url="([^"]+)"[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL),
+    re.compile(r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*result[^"]*"[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL),
+]
+# 预编译 HTML 标签清理正则
+_STRIP_HTML_RE = re.compile(r'<[^>]+>')
+
+
 def _parse_360_html(html: str, max_results: int) -> list[dict]:
     """从 360 搜索 HTML 中解析结果。"""
     results = []
-    # 360 结果：<h3><a href="...">标题</a></h3>
-    patterns = [
-        r'<h3[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?</h3>',
-        r'<a[^>]+data-url="([^"]+)"[^>]*>(.*?)</a>',
-        r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*result[^"]*"[^>]*>(.*?)</a>',
-    ]
-    for pattern in patterns:
-        for match in re.finditer(pattern, html, re.IGNORECASE | re.DOTALL):
+    for pattern in _360_PATTERNS:
+        for match in pattern.finditer(html):
             href = match.group(1)
-            title = re.sub(r'<[^>]+>', '', match.group(2)).strip()
+            title = _STRIP_HTML_RE.sub('', match.group(2)).strip()
             # 过滤广告和无效链接
             if not title or len(title) < 5:
                 continue
@@ -236,19 +240,22 @@ def _so_search(query: str, max_results: int, timeout: int = _SEARCH_TIMEOUT) -> 
 
 # ========== 3. Bing 搜索 ==========
 
+# 预编译 Bing 搜索 HTML 解析正则
+_BING_PATTERNS = [
+    re.compile(r'<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?</li>', re.IGNORECASE | re.DOTALL),
+    re.compile(r'<h2[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?</h2>', re.IGNORECASE | re.DOTALL),
+    re.compile(r'<a[^>]+href="([^"]+)"[^>]*target="_blank"[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL),
+]
+
+
 def _parse_bing_html(html: str, max_results: int) -> list[dict]:
     results = []
-    patterns = [
-        r'<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?</li>',
-        r'<h2[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?</h2>',
-        r'<a[^>]+href="([^"]+)"[^>]*target="_blank"[^>]*>(.*?)</a>',
-    ]
-    for pattern in patterns:
-        for match in re.finditer(pattern, html, re.IGNORECASE | re.DOTALL):
+    for pattern in _BING_PATTERNS:
+        for match in pattern.finditer(html):
             href = match.group(1)
             if href.startswith("/"):
                 href = "https://www.bing.com" + href
-            title = re.sub(r'<[^>]+>', '', match.group(2)).strip()
+            title = _STRIP_HTML_RE.sub('', match.group(2)).strip()
             if title in ("缓存", "相似", "Cached", "Similar", ""):
                 continue
             if "microsoft" in href.lower() and "bing" in href.lower():
