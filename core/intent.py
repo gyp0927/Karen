@@ -37,6 +37,7 @@ class IntentType(StrEnum):
     CLARIFY = "clarify"  # 澄清/追问（详细说说、举个例子）
     TRANSLATION = "translation"  # 翻译请求
     COMPARISON = "comparison"  # 对比请求（A和B的区别）
+    SKILL = "skill"  # 技能触发（关键词匹配到 skill）
     UNKNOWN = "unknown"  # 不确定
 
 
@@ -55,8 +56,53 @@ class IntentResult:
     use_coding_prompt: bool = False  # 是否使用代码专用提示词
     # 上下文相关：如果是 clarify，这里记录上一轮意图
     parent_intent: str | None = None
-    # 分类器来源："rule" | "context" | "llm"
+    # 分类器来源："rule" | "context" | "llm" | "skill"
     source: str = "rule"
+    # 技能相关：匹配到的 skill 名称
+    skill_name: str | None = None
+
+
+# ========== 第零层：Skill 触发器 ==========
+
+
+# Skill 退出关键词（检测到后建议清空 active_skill）
+_SKILL_EXIT_KEYWORDS = [
+    "退出",
+    "退出审查",
+    "退出技能",
+    "结束",
+    "完成了",
+    "done",
+    "exit",
+    "quit",
+]
+
+
+def _is_skill_exit(query: str) -> bool:
+    """检测用户是否想退出当前 skill。"""
+    q = query.strip().lower()
+    return any(kw in q for kw in _SKILL_EXIT_KEYWORDS)
+
+
+def _skill_classify(query: str) -> IntentResult | None:
+    """Skill trigger 匹配。命中则返回结果，未命中返回 None。
+
+    作为第零层（最高优先级），在规则引擎之前执行。
+    """
+    from core.skills import match_skill
+
+    skill = match_skill(query)
+    if skill:
+        return IntentResult(
+            intent=IntentType.SKILL,
+            confidence=0.95,
+            skip_search=True,
+            skip_memory=True,
+            skip_knowledge=True,
+            skill_name=skill.name,
+            source="skill",
+        )
+    return None
 
 
 # ========== 第一层：规则引擎 ==========
@@ -372,11 +418,33 @@ def _infer_parent_intent(history: list[BaseMessage]) -> IntentResult | None:
 def classify_intent_sync(
     query: str,
     history: list[BaseMessage] | None = None,
+    active_skill: str | None = None,
 ) -> IntentResult:
     """同步版本的意图识别（仅使用规则和上下文，无 LLM）。
 
     用于无法使用 async 的场景（如图编译期的路由判断）。
+
+    Args:
+        query: 用户输入文本
+        history: 历史消息列表
+        active_skill: 当前已激活的 skill 名称（多轮对话中保持）
     """
+    # 第零层：Skill 退出检测（如果已有 active_skill）
+    if active_skill and _is_skill_exit(query):
+        return IntentResult(
+            intent=IntentType.UNKNOWN,
+            confidence=0.5,
+            skip_search=False,
+            skip_memory=False,
+            skip_knowledge=False,
+            source="skill_exit",
+        )
+
+    # 第零层：Skill 触发器（最高优先级）
+    result = _skill_classify(query)
+    if result:
+        return result
+
     # 第一层：规则引擎
     result = _rule_classify(query)
     if result:
@@ -389,7 +457,7 @@ def classify_intent_sync(
             return result
 
     return IntentResult(
-        IntentType.UNKNOWN,
+        intent=IntentType.UNKNOWN,
         confidence=0.3,
         skip_search=False,
         skip_memory=False,

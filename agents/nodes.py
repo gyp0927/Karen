@@ -553,7 +553,22 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
             query = cast(str, msg.content)
             break
     history = state.get("messages", [])
-    result = classify_intent_sync(query, history=history)
+
+    # 获取当前已激活的 skill（多轮对话中保持）
+    task_ctx = dict(state.get("task_context", {}))
+    active_skill = task_ctx.get("active_skill")
+
+    result = classify_intent_sync(query, history=history, active_skill=active_skill)
+
+    # 更新 active_skill：新触发则设置，退出则清空，否则保持
+    if result.skill_name:
+        active_skill = result.skill_name
+        logger.info(f"[responder] Skill activated: {active_skill}")
+    elif result.source == "skill_exit":
+        if active_skill:
+            logger.info(f"[responder] Skill exited: {active_skill}")
+        active_skill = None
+
     intent = {
         "intent": result.intent,
         "confidence": result.confidence,
@@ -561,10 +576,12 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
         "skip_memory": result.skip_memory,
         "skip_knowledge": result.skip_knowledge,
         "source": result.source,
+        "skill_name": result.skill_name,
     }
     state = {k: (list(v) if k == "messages" else v) for k, v in state.items()}
     task_ctx = dict(state.get("task_context", {}))
     task_ctx["intent_result"] = intent
+    task_ctx["active_skill"] = active_skill
     state["task_context"] = task_ctx
 
     is_simple = intent.get("skip_search") and intent.get("skip_memory")
@@ -633,6 +650,16 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
         from cognition.tool_engine import execute_python
 
         tools = [execute_python]
+
+    # ---- Skill 提示词注入：如果当前有激活的 skill，将 skill body 注入 system prompt ----
+    if active_skill:
+        from core.skills import get_skill
+
+        skill = get_skill(active_skill)
+        if skill:
+            skill_prompt = skill.to_prompt_text()
+            responder_prompt = f"{responder_prompt}\n\n{skill_prompt}"
+            logger.info(f"[responder] Injected skill prompt: {active_skill}")
 
     # Fast mode：简单查询完全禁用 cognition 开销；复杂查询启用 persona+emotion+intuition+metacognition
     use_cognition = not is_simple
