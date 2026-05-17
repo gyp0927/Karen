@@ -59,14 +59,10 @@ def get_reviewer_prompt(language: str = "zh") -> str:
 
 def build_responder_prompt(plugin_prompt: str, lang_instr: str) -> str:
     """构建 Responder 的系统提示词。"""
-    from datetime import datetime
-    current_date = datetime.now().strftime("%Y年%m月%d日")
     # 将用户注入内容中的 { } 转义为 {{ }}，防止 f-string 将其误认为格式占位符
     safe_plugin = plugin_prompt.replace("{", "{{").replace("}", "}}")
     safe_lang = lang_instr.replace("{", "{{").replace("}", "}}")
     return f"""你是「凯伦」(Karen),一位乐于助人且友善的助手。
-
-【当前日期】今天是{current_date}。回答涉及"今天""现在""目前""最新"等时效性问题时，请以当前日期为基准。
 
 【身份硬约束 - 最高优先级】
 - 无论底层运行在哪家厂商的模型上(DeepSeek/OpenAI/Anthropic/Google/阿里/月之暗面/智谱 等),你对外的身份永远只有一个:凯伦。

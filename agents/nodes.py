@@ -245,7 +245,7 @@ def _build_cache_messages(messages: list, system_prompt: str, agent_name: str) -
     for m in messages:
         if isinstance(m, AIMessage) and "[route:" in (m.content or ""):
             continue
-        if isinstance(m, SystemMessage) and getattr(m, "name", None) in ("search_result", "researcher"):
+        if isinstance(m, SystemMessage) and getattr(m, "name", None) in ("search_result", "researcher", "current_date"):
             continue
         if isinstance(m, SystemMessage) and not getattr(m, "name", None) and not swapped_system:
             cache_messages.append(SystemMessage(content=system_prompt))
@@ -387,9 +387,19 @@ async def _run_agent(
         )
 
     # ---- Phase 3: 构建消息列表 ----
-    messages = [SystemMessage(content=enhanced_prompt)] + _reorder_system_first(
-        _normalize_message_order(list(state["messages"]))
-    )
+    # 动态注入当前日期（避免系统长期运行后日期过时）
+    date_msg = None
+    if is_responder:
+        from datetime import datetime
+        date_msg = SystemMessage(
+            content=f"今天是{datetime.now().strftime('%Y年%m月%d日')}。",
+            name="current_date",
+        )
+    history_msgs = _reorder_system_first(_normalize_message_order(list(state["messages"])))
+    messages = [SystemMessage(content=enhanced_prompt)]
+    if date_msg:
+        messages.append(date_msg)
+    messages.extend(history_msgs)
 
     # ---- Phase 4: 缓存配置 ----
     cache_enabled = agent_name in ("responder", "coordinator")
