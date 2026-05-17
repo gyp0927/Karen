@@ -7,9 +7,8 @@
 这会启动一个交互式对话，你可以与具备人类思维特征的AI交流。
 """
 
-import sys
 import json
-from datetime import datetime
+import sys
 
 # 添加src到路径
 sys.path.insert(0, 'e:/人类的思维/src')
@@ -128,8 +127,8 @@ def run_interactive():
             print(f"\n[错误] {e}")
 
     # 退出时保存状态
-    final_state = mind.save_state()
-    print(f"\n[系统] 会话结束")
+    _final_state = mind.save_state()
+    print("\n[系统] 会话结束")
     print(f"[系统] 总计 {mind.total_turns} 轮对话")
     print(f"[系统] 最终情感: {mind.emotion.get_dominant_emotion()}")
 
@@ -178,7 +177,7 @@ def run_demo_scenario():
         print(f"\n用户: {scenario['user']}")
 
         # 显示处理前的状态
-        print(f"\n  [处理前状态]")
+        print("\n  [处理前状态]")
         print_emotion_state(mind)
 
         # 处理
@@ -188,12 +187,12 @@ def run_demo_scenario():
         print(f"\n{mind.name}: {response}")
 
         # 显示处理后的状态
-        print(f"\n  [处理后状态]")
+        print("\n  [处理后状态]")
         print_emotion_state(mind)
         print_memory_state(mind)
 
         # 显示思维过程摘要
-        print(f"\n  [思维过程摘要]")
+        print("\n  [思维过程摘要]")
         if 'phases' in log:
             for phase_name, phase_data in log['phases'].items():
                 if phase_name == 'perception':
@@ -210,7 +209,7 @@ def run_demo_scenario():
     print(f"\n{'='*70}")
     print("  演示结束")
     print(f"{'='*70}")
-    print(f"\n最终状态:")
+    print("\n最终状态:")
     print(f"  对话轮次: {mind.total_turns}")
     print(f"  情感历史长度: {len(mind.emotion.history)}")
     print(f"  记忆数量: {mind.memory.get_memory_stats()['episodic']}")

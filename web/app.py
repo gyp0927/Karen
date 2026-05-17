@@ -1024,7 +1024,7 @@ def handle_delete_session(data):
                     )
                     if n:
                         logger.info(f"Cleared {n} memories for deleted session {session_id}")
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning(f"Timeout clearing memories for session {session_id}")
                 except Exception as e:
                     logger.warning(f"Failed to clear memories for session {session_id}: {e}")

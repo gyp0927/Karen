@@ -2,13 +2,12 @@
 独立窗口桌面客户端 - 使用系统 WebView2 渲染网页
 不需要额外安装浏览器
 """
+import atexit
 import os
-import sys
 import socket
+import sys
 import threading
 import time
-import atexit
-import subprocess
 
 # 获取程序所在目录
 if getattr(sys, 'frozen', False):
@@ -129,7 +128,6 @@ def start_flask_server(port):
     log.setLevel(logging.ERROR)
 
     # 使用 threading 模式（Socket.IO 走长轮询，token 流式照常工作）
-    from flask_socketio import SocketIO
     from web.app import socketio
     socketio.run(app, host="127.0.0.1", port=port, debug=False, use_reloader=False)
 
@@ -194,7 +192,7 @@ def main():
     cached_hash = ""
     if os.path.exists(hash_file):
         try:
-            with open(hash_file, "r", encoding="utf-8") as f:
+            with open(hash_file, encoding="utf-8") as f:
                 cached_hash = f.read().strip()
         except OSError:
             pass
@@ -202,7 +200,7 @@ def main():
         import shutil
         try:
             shutil.rmtree(webview_data_dir)
-            print(f"[Client] script.js changed, cleared WebView2 cache")
+            print("[Client] script.js changed, cleared WebView2 cache")
         except Exception as e:
             print(f"[Client] Warning: could not clear cache: {e}")
     os.makedirs(webview_data_dir, exist_ok=True)

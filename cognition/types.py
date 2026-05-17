@@ -1,6 +1,5 @@
 """认知系统类型定义"""
 from dataclasses import dataclass, field
-from typing import Optional
 from enum import Enum
 
 
@@ -39,7 +38,7 @@ class EmotionalState:
     def to_prompt_text(self) -> str:
         """将情感状态转换为提示词文本"""
         lines = [
-            f"【当前内心状态】",
+            "【当前内心状态】",
             f"  情绪: {self.mood.value}",
             f"  信心: {self.confidence:.0%}",
             f"  好奇: {self.curiosity:.0%}",
@@ -101,7 +100,7 @@ class InnerThought:
     agent_name: str
     thought: str
     thinking_mode: ThinkingMode
-    timestamp: Optional[str] = None
+    timestamp: str | None = None
 
 
 @dataclass
@@ -120,7 +119,7 @@ class MetacognitionResult:
     certainty: float           # 对答案的确信度 0-1
     knowledge_gaps: list[str]  # 知识盲区
     potential_biases: list[str]  # 潜在偏见
-    self_correction: Optional[str] = None  # 自我修正建议
+    self_correction: str | None = None  # 自我修正建议
     should_rethink: bool = False  # 是否需要重新思考
 
 
@@ -179,7 +178,7 @@ class CognitiveState:
     thoughts: list[InnerThought] = field(default_factory=list)
     thinking_mode: ThinkingMode = field(default_factory=lambda: ThinkingMode.INTUITION)
     turn_count: int = 0
-    last_metacognition: Optional[MetacognitionResult] = None
+    last_metacognition: MetacognitionResult | None = None
 
     def record_thought(self, agent_name: str, thought: str,
                        mode: ThinkingMode = ThinkingMode.INTUITION) -> None:

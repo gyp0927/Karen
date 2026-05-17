@@ -5,12 +5,11 @@
 - 感觉记忆、工作记忆、情景记忆、语义记忆、程序记忆
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timedelta
-import uuid
 import math
-import random
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any
 
 
 @dataclass
@@ -24,9 +23,9 @@ class Memory:
     emotion_intensity: float = 0.5              # 情感强度
     importance: float = 0.5                     # 重要性（0-1）
     retrieval_count: int = 0                    # 被提取次数
-    last_retrieved: Optional[datetime] = None   # 上次提取时间
-    retrieval_cues: List[str] = field(default_factory=list)
-    context: Dict[str, Any] = field(default_factory=dict)
+    last_retrieved: datetime | None = None   # 上次提取时间
+    retrieval_cues: list[str] = field(default_factory=list)
+    context: dict[str, Any] = field(default_factory=dict)
     confidence: float = 1.0                     # 记忆可靠性（重构后可能降低）
 
     def get_age_hours(self) -> float:
@@ -80,8 +79,8 @@ class WorkingMemory:
     DECAY_SECONDS = 30  # 20-30秒自动衰减
 
     def __init__(self):
-        self.slots: List[Dict] = []         # 当前内容
-        self.focus: Optional[str] = None    # 当前注意力焦点
+        self.slots: list[dict] = []         # 当前内容
+        self.focus: str | None = None    # 当前注意力焦点
         self.cognitive_load: float = 0.0    # 认知负荷
 
     def add(self, content: str, content_type: str = "semantic",
@@ -121,7 +120,7 @@ class WorkingMemory:
         ]
         self._update_load()
 
-    def get_contents(self) -> List[str]:
+    def get_contents(self) -> list[str]:
         """获取当前工作记忆中的内容"""
         self.clear_expired()
         return [slot["content"] for slot in self.slots]
@@ -134,7 +133,7 @@ class WorkingMemory:
         """更新认知负荷"""
         self.cognitive_load = len(self.slots) / self.CAPACITY
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "slots": self.get_contents(),
             "focus": self.focus,
@@ -158,20 +157,20 @@ class MemorySystem:
         self.working_memory = WorkingMemory()
 
         # 长期记忆存储
-        self.episodic_memories: List[Memory] = []   # 情景记忆
-        self.semantic_memories: List[Memory] = []   # 语义记忆
-        self.procedural_memories: List[Memory] = [] # 程序记忆
+        self.episodic_memories: list[Memory] = []   # 情景记忆
+        self.semantic_memories: list[Memory] = []   # 语义记忆
+        self.procedural_memories: list[Memory] = [] # 程序记忆
 
         # 自传体记忆索引（重要记忆）
-        self.autobiographical_memories: List[str] = []
+        self.autobiographical_memories: list[str] = []
 
         # 关联网络（概念连接）
-        self.association_network: Dict[str, List[Tuple[str, float]]] = {}
+        self.association_network: dict[str, list[tuple[str, float]]] = {}
 
     def encode(self, content: str, memory_type: str = "episodic",
                emotion_valence: float = 0.0, emotion_intensity: float = 0.5,
-               importance: float = 0.5, context: Dict = None,
-               cues: List[str] = None) -> str:
+               importance: float = 0.5, context: dict = None,
+               cues: list[str] = None) -> str:
         """
         编码新记忆
 
@@ -230,9 +229,9 @@ class MemorySystem:
                     else:
                         self.association_network[word].append((other_word, 0.1))
 
-    def retrieve(self, cue: str, memory_type: Optional[str] = None,
+    def retrieve(self, cue: str, memory_type: str | None = None,
                  current_emotion_valence: float = 0.0,
-                 top_k: int = 3) -> List[Tuple[Memory, float]]:
+                 top_k: int = 3) -> list[tuple[Memory, float]]:
         """
         基于线索检索记忆
 
@@ -304,11 +303,11 @@ class MemorySystem:
         return 0.0
 
     def retrieve_similar(self, content: str, current_emotion_valence: float = 0.0,
-                        top_k: int = 3) -> List[Tuple[Memory, float]]:
+                        top_k: int = 3) -> list[tuple[Memory, float]]:
         """基于内容相似性检索"""
         return self.retrieve(content, None, current_emotion_valence, top_k)
 
-    def get_recent_memories(self, hours: float = 24, memory_type: Optional[str] = None) -> List[Memory]:
+    def get_recent_memories(self, hours: float = 24, memory_type: str | None = None) -> list[Memory]:
         """获取最近的记忆"""
         cutoff = datetime.now() - timedelta(hours=hours)
 
@@ -320,7 +319,7 @@ class MemorySystem:
 
         return [m for m in all_memories if m.timestamp > cutoff]
 
-    def reconstruct_memory(self, memory_id: str, current_context: Dict = None) -> Optional[Memory]:
+    def reconstruct_memory(self, memory_id: str, current_context: dict = None) -> Memory | None:
         """
         记忆重构 - 模拟人类记忆的重建过程
 
@@ -348,11 +347,11 @@ class MemorySystem:
 
         return memory
 
-    def get_working_memory(self) -> Dict:
+    def get_working_memory(self) -> dict:
         """获取工作记忆状态"""
         return self.working_memory.to_dict()
 
-    def get_memory_stats(self) -> Dict:
+    def get_memory_stats(self) -> dict:
         """获取记忆统计"""
         return {
             "episodic": len(self.episodic_memories),

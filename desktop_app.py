@@ -1,10 +1,9 @@
 """
 桌面应用入口 - 无控制台窗口
 """
-import sys
 import os
 import socket
-import subprocess
+import sys
 
 # 获取程序所在目录
 if getattr(sys, 'frozen', False):
@@ -106,7 +105,8 @@ if not check_single_instance():
                 sys.exit(0)
 
 # 注册退出时清理锁文件
-import atexit
+import atexit  # noqa: E402
+
 atexit.register(cleanup_lock)
 
 # 隐藏控制台窗口（Windows）——只在非交互式环境下（如打包后的exe）
@@ -115,7 +115,7 @@ if sys.platform == 'win32' and not sys.stdout.isatty():
     ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 
 # 导入并启动Flask应用
-from web.app import app, init_agents, socketio
+from web.app import app, init_agents, socketio  # noqa: E402
 
 if __name__ == "__main__":
     try:

@@ -5,11 +5,10 @@
 情感不是装饰，而是影响注意力、记忆和决策的核心系统
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
-import random
 import math
+import random
+from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass
@@ -26,7 +25,7 @@ class EmotionState:
         self.arousal = max(0.0, min(1.0, self.arousal))
         self.dominance = max(0.0, min(1.0, self.dominance))
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "valence": self.valence,
             "arousal": self.arousal,
@@ -41,8 +40,8 @@ class EmotionConcept:
     name: str
     valence: float
     arousal: float
-    typical_triggers: List[str] = field(default_factory=list)
-    action_tendencies: List[str] = field(default_factory=list)
+    typical_triggers: list[str] = field(default_factory=list)
+    action_tendencies: list[str] = field(default_factory=list)
 
 
 class EmotionSystem:
@@ -104,7 +103,7 @@ class EmotionSystem:
         # 当前情感状态
         self.current = EmotionState(valence=0.2, arousal=0.4, dominance=0.5)
         # 情感历史
-        self.history: List[EmotionState] = []
+        self.history: list[EmotionState] = []
         # 情感惯性（情绪有多"黏"）
         self.inertia = 0.7
         # 输入敏感度
@@ -112,9 +111,9 @@ class EmotionSystem:
         # 内在波动
         self.internal_noise = 0.05
         # 情感偏好（学习得到）
-        self.emotion_preferences: Dict[str, float] = {}
+        self.emotion_preferences: dict[str, float] = {}
         # 情感调节策略使用历史
-        self.regulation_history: List[Dict] = []
+        self.regulation_history: list[dict] = []
 
     def evaluate_input(self, text: str) -> EmotionState:
         """
@@ -165,7 +164,7 @@ class EmotionSystem:
             # 中性
             return EmotionState(valence=0.0, arousal=0.4)
 
-    def update(self, external_input: Optional[EmotionState] = None):
+    def update(self, external_input: EmotionState | None = None):
         """
         更新情感状态
 
@@ -232,9 +231,9 @@ class EmotionSystem:
         else:
             return "neutral"
 
-    def get_emotion_expression(self) -> Dict:
+    def get_emotion_expression(self) -> dict:
         """获取情感表达标记"""
-        dominant = self.get_dominant_emotion()
+        _dominant = self.get_dominant_emotion()
 
         # 基于情感状态生成表达特征
         expressions = {
@@ -361,7 +360,7 @@ class EmotionSystem:
 
         return stimulus_salience
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "current": self.current.to_dict(),
             "dominant_emotion": self.get_dominant_emotion(),

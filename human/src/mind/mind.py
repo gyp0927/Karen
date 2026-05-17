@@ -4,13 +4,12 @@ Mind - 主AI类
 整合所有子系统，提供统一的对话接口
 """
 
-from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
-from .event_bus import EventBus, Signal, SignalType
 from .emotion_system import EmotionSystem
-from .memory_system import MemorySystem
+from .event_bus import EventBus, Signal, SignalType
 from .global_workspace import GlobalWorkspace
+from .memory_system import MemorySystem
 from .metacognition import Metacognition
 from .thinking_process import ThinkingProcess
 
@@ -44,7 +43,7 @@ class Mind:
         )
 
         # 对话历史
-        self.conversation_history: List[Dict] = []
+        self.conversation_history: list[dict] = []
         self.total_turns = 0
 
         # 设置事件监听
@@ -85,7 +84,7 @@ class Mind:
             cues=["values", "identity", "purpose"]
         )
 
-    def think(self, input_text: str, user_id: str = "default") -> Tuple[str, Dict]:
+    def think(self, input_text: str, user_id: str = "default") -> tuple[str, dict]:
         """
         思考 - 处理输入并生成输出
 
@@ -124,7 +123,7 @@ class Mind:
 
         return output, process_log
 
-    def get_state(self) -> Dict:
+    def get_state(self) -> dict:
         """获取当前状态快照"""
         return {
             "name": self.name,
@@ -140,7 +139,7 @@ class Mind:
         """获取身份叙事"""
         return self.metacognition.self_model.narrative
 
-    def get_emotion_history(self) -> List[Dict]:
+    def get_emotion_history(self) -> list[dict]:
         """获取情感历史"""
         return [e.to_dict() for e in self.emotion.history]
 
@@ -171,7 +170,7 @@ class Mind:
 
         return " ".join(reflection_parts)
 
-    def save_state(self) -> Dict:
+    def save_state(self) -> dict:
         """保存完整状态（用于持久化）"""
         return {
             "name": self.name,

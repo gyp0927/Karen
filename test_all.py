@@ -33,8 +33,8 @@ def test(name):
 # ========== 测试 1: 图编译 ==========
 @test("图编译 - 快速模式")
 async def test_fast_graph():
-    from graph.orchestrator import create_fast_graph
     from agents.nodes import responder_node
+    from graph.orchestrator import create_fast_graph
 
     graph = create_fast_graph(responder_node)
     assert graph is not None
@@ -42,9 +42,9 @@ async def test_fast_graph():
 
 @test("图编译 - 协调模式")
 async def test_coordination_graph():
-    from graph.orchestrator import create_coordination_graph
     from agents.nodes import coordinator_node, researcher_node, responder_node
     from agents.tools import tool_caller_node
+    from graph.orchestrator import create_coordination_graph
 
     graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
     assert graph is not None
@@ -53,8 +53,9 @@ async def test_coordination_graph():
 # ========== 测试 2: Agent 节点 ==========
 @test("Agent 节点 - Responder")
 async def test_responder():
-    from agents.nodes import responder_node
     from langchain_core.messages import HumanMessage
+
+    from agents.nodes import responder_node
 
     state = {
         "messages": [HumanMessage(content="你好")],
@@ -119,7 +120,7 @@ async def test_cache_stats():
 # ========== 测试 5: 配置系统 ==========
 @test("配置 - 提供商列表")
 async def test_providers():
-    from core.config import list_providers, PROVIDER_CONFIG
+    from core.config import list_providers
 
     providers = list_providers()
     assert "siliconflow" in providers
@@ -138,7 +139,7 @@ async def test_model_name():
 # ========== 测试 6: 记忆系统 ==========
 @test("记忆系统 - 存储和检索")
 async def test_memory():
-    from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
+    from core.memory_client import _MEMORY_SYSTEM_AVAILABLE, get_memory_store
 
     if not _MEMORY_SYSTEM_AVAILABLE:
         print("    SKIP: 记忆系统依赖未安装")
@@ -167,7 +168,7 @@ async def test_memory():
 # ========== 测试 7: RAG 知识库 ==========
 @test("RAG - 基本操作")
 async def test_rag():
-    from core.rag import add_document, search_knowledge, get_knowledge_stats
+    from core.rag import add_document, get_knowledge_stats, search_knowledge
 
     # 添加文档
     chunks = await add_document("Python是一种高级编程语言。", source="test_doc")
@@ -241,7 +242,7 @@ async def test_skill_trigger_match():
 
 @test("技能系统 - 意图分类集成")
 async def test_skill_intent_integration():
-    from core.intent import classify_intent_sync, IntentType
+    from core.intent import IntentType, classify_intent_sync
 
     result = classify_intent_sync("帮我看看这段代码")
     assert result.intent == IntentType.SKILL
@@ -257,7 +258,6 @@ async def test_skill_intent_integration():
 @test("子 Agent - 调度器并发")
 async def test_subagent_scheduler():
     from core.subagent.scheduler import TaskScheduler
-    from core.subagent.base import SubTask
 
     scheduler = TaskScheduler(max_concurrency=2, default_agent_factory=lambda: None)
     assert scheduler.max_concurrency == 2
@@ -279,8 +279,9 @@ async def test_subagent_aggregator():
 
 @test("子 Agent - 场景检测")
 async def test_subagent_scenario():
-    from graph.nodes.subagent import _detect_scenario
     from langchain_core.messages import HumanMessage
+
+    from graph.nodes.subagent import _detect_scenario
 
     messages = [HumanMessage(content="深入研究一下AI")]
     scenario = _detect_scenario("深入研究一下AI", messages)
@@ -289,9 +290,10 @@ async def test_subagent_scenario():
 
 @test("端到端 - 快速模式")
 async def test_chat_fast():
-    from graph.orchestrator import create_fast_graph
-    from agents.nodes import responder_node
     from langchain_core.messages import HumanMessage
+
+    from agents.nodes import responder_node
+    from graph.orchestrator import create_fast_graph
 
     graph = create_fast_graph(responder_node)
     initial_state = {

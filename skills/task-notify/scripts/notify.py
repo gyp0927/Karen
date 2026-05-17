@@ -11,6 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
+
 def get_icon_path() -> str | None:
     """获取 Claude 图标路径。"""
     script_dir = Path(__file__).parent

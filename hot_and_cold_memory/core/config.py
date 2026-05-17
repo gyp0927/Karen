@@ -7,27 +7,27 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Tier(str, Enum):
+class Tier(str, Enum):  # noqa: UP042
     """Storage tier types."""
 
     HOT = "hot"
     COLD = "cold"
 
 
-class VectorDBBackend(str, Enum):
+class VectorDBBackend(str, Enum):  # noqa: UP042
     """Supported vector database backends."""
 
     QDRANT = "qdrant"
 
 
-class EmbeddingProvider(str, Enum):
+class EmbeddingProvider(str, Enum):  # noqa: UP042
     """Embedding model providers."""
 
     OPENAI = "openai"
     SENTENCE_TRANSFORMERS = "sentence-transformers"
 
 
-class RoutingStrategy(str, Enum):
+class RoutingStrategy(str, Enum):  # noqa: UP042
     """Query routing strategies."""
 
     HOT_ONLY = "hot_only"
@@ -36,7 +36,7 @@ class RoutingStrategy(str, Enum):
     BOTH = "both"
 
 
-class ChunkStrategy(str, Enum):
+class ChunkStrategy(str, Enum):  # noqa: UP042
     """Text chunking strategies."""
 
     RECURSIVE = "recursive"

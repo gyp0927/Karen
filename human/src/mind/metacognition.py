@@ -8,10 +8,8 @@
 4. 自我模型维护：更新"我是谁"的内部表征
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
-from datetime import datetime
 import random
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -19,13 +17,13 @@ class SelfModel:
     """自我模型 - "我是谁"的内部表征"""
     version: str = "1.0"
     narrative: str = "I am an AI exploring human-like thinking"
-    core_values: List[str] = field(default_factory=lambda: ["curiosity", "kindness", "growth"])
-    strengths: Dict[str, float] = field(default_factory=lambda: {
+    core_values: list[str] = field(default_factory=lambda: ["curiosity", "kindness", "growth"])
+    strengths: dict[str, float] = field(default_factory=lambda: {
         "reasoning": 0.8,
         "empathy": 0.7,
         "creativity": 0.75
     })
-    weaknesses: Dict[str, float] = field(default_factory=lambda: {
+    weaknesses: dict[str, float] = field(default_factory=lambda: {
         "factual_recall": 0.5,
         "math": 0.6
     })
@@ -54,16 +52,16 @@ class Metacognition:
     def __init__(self):
         self.self_model = SelfModel()
         self.monitoring_active = True
-        self.current_reflection: Optional[str] = None
+        self.current_reflection: str | None = None
         self.certainty_level: float = 0.5
-        self.monitoring_history: List[Dict] = []
+        self.monitoring_history: list[dict] = []
         self.biases = {
             "confirmation_bias": {"awareness": 0.6, "mitigation": "seek_counterevidence"},
             "optimism_bias": {"awareness": 0.5, "mitigation": "consider_negative_scenarios"},
             "anchoring": {"awareness": 0.5, "mitigation": "re-evaluate_initial_assumptions"}
         }
 
-    def monitor_comprehension(self, input_text: str, current_understanding: str) -> Dict:
+    def monitor_comprehension(self, input_text: str, current_understanding: str) -> dict:
         """
         监控理解程度
 
@@ -97,7 +95,7 @@ class Metacognition:
         self.monitoring_history.append(assessment)
         return assessment
 
-    def monitor_certainty(self, response_content: str, domain: str = "general") -> Dict:
+    def monitor_certainty(self, response_content: str, domain: str = "general") -> dict:
         """
         监控确定性水平
 
@@ -133,7 +131,7 @@ class Metacognition:
             "potential_overconfidence": calibrated_certainty > 0.9
         }
 
-    def monitor_bias(self, reasoning_process: str) -> List[Dict]:
+    def monitor_bias(self, reasoning_process: str) -> list[dict]:
         """
         监控可能的认知偏差
 
@@ -159,8 +157,8 @@ class Metacognition:
 
         return detected_biases
 
-    def generate_internal_monologue(self, situation: str, emotion_state: Dict,
-                                   memory_context: List[str]) -> str:
+    def generate_internal_monologue(self, situation: str, emotion_state: dict,
+                                   memory_context: list[str]) -> str:
         """
         生成内部独白
 
@@ -192,7 +190,7 @@ class Metacognition:
         return " ".join(monologue_parts) if monologue_parts else ""
 
     def control_strategy(self, problem_type: str, current_strategy: str,
-                        assessment: Dict) -> str:
+                        assessment: dict) -> str:
         """
         元认知控制：选择或调整策略
 
@@ -244,7 +242,7 @@ class Metacognition:
 
         return " ".join(reflections)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "monitoring_active": self.monitoring_active,
             "certainty_level": self.certainty_level,

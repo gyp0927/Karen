@@ -1,7 +1,7 @@
 import asyncio
-import time
 import logging
 import sys
+import time
 
 # 抑制第三方库的 verbose 日志
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
@@ -13,14 +13,15 @@ logging.getLogger("chromadb").setLevel(logging.ERROR)
 
 sys.path.insert(0, "E:/果冻ai-memory/多agent聊天")
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage  # noqa: E402
+
 
 async def benchmark_fast():
     """测试快速模式（跳过Coordinator，并行搜索+Responder）"""
+    from agents.nodes import responder_node
+    from agents.search import memory_searcher_agent, web_searcher_agent
+    from agents.tools import tool_caller_node
     from graph.orchestrator import create_fast_graph
-    from agents.search import web_searcher_agent, memory_searcher_agent
-from agents.tools import tool_caller_node
-from agents.nodes import responder_node
 
     graph = create_fast_graph(
         web_searcher_agent, memory_searcher_agent,
@@ -52,8 +53,9 @@ from agents.nodes import responder_node
 
 async def benchmark_coordination():
     """测试协调模式（Coordinator + 并行搜索 + Responder）"""
-    from graph.orchestrator import create_coordination_graph
     from agents.nodes import coordinator_node, researcher_node, responder_node
+    from agents.tools import tool_caller_node
+    from graph.orchestrator import create_coordination_graph
 
     graph = create_coordination_graph(
         coordinator_node, researcher_node, tool_caller_node, responder_node,

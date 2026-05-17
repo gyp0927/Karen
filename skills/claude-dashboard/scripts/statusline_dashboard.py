@@ -74,8 +74,8 @@ def get_weather():
     """获取天气，带文件缓存。"""
     import tempfile
     import time
-    import urllib.request
     import urllib.parse
+    import urllib.request
 
     cache_dir = tempfile.gettempdir()
     cache_file = os.path.join(cache_dir, "claude_dashboard_weather.txt")
@@ -85,7 +85,7 @@ def get_weather():
         age = time.time() - os.path.getmtime(cache_file)
         if age < cache_age_max:
             try:
-                with open(cache_file, "r", encoding="utf-8") as f:
+                with open(cache_file, encoding="utf-8") as f:
                     return f.read().strip()
             except Exception:
                 pass
@@ -110,7 +110,7 @@ def get_weather():
 
     if os.path.exists(cache_file):
         try:
-            with open(cache_file, "r", encoding="utf-8") as f:
+            with open(cache_file, encoding="utf-8") as f:
                 return f.read().strip()
         except Exception:
             pass

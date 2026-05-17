@@ -11,17 +11,17 @@
     enhanced_prompt = mind.enhance_prompt("responder", base_prompt, query, state)
 """
 
+from cognition.human_mind import HumanMind, enhance_agent_prompt, process_agent_response
 from cognition.types import (
     CognitiveState,
     EmotionalState,
-    Mood,
-    ThinkingMode,
     InnerThought,
     IntuitionResult,
     MetacognitionResult,
+    Mood,
     PersonaConfig,
+    ThinkingMode,
 )
-from cognition.human_mind import HumanMind, enhance_agent_prompt, process_agent_response
 
 __all__ = [
     "CognitiveState",

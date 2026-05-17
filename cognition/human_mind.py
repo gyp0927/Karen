@@ -15,9 +15,6 @@
 """
 import logging
 import os
-from typing import Optional
-
-from langchain_core.messages import AIMessage
 
 from cognition.types import CognitiveState, ThinkingMode
 
@@ -28,13 +25,13 @@ logger = logging.getLogger(__name__)
 _engine_available = True
 try:
     from cognition.engine import (
-        get_monologue_engine,
-        wrap_prompt_with_monologue,
         get_emotional_manager,
-        inject_emotion_to_prompt,
         get_intuition_engine,
         get_metacognition_engine,
+        get_monologue_engine,
         get_persona_manager,
+        inject_emotion_to_prompt,
+        wrap_prompt_with_monologue,
     )
 except Exception as _e:
     _engine_available = False
@@ -43,10 +40,16 @@ except Exception as _e:
     def _noop(*args, **kwargs):
         pass
 
+    def _wrap_prompt(*a, **k):
+        return (a[1] if len(a) > 1 else "", False)
+
+    def _inject_emotion(*a, **k):
+        return a[1] if len(a) > 1 else ""
+
     get_monologue_engine = _noop
-    wrap_prompt_with_monologue = lambda *a, **k: (a[1] if len(a) > 1 else "", False)
+    wrap_prompt_with_monologue = _wrap_prompt
     get_emotional_manager = _noop
-    inject_emotion_to_prompt = lambda *a, **k: a[1] if len(a) > 1 else ""
+    inject_emotion_to_prompt = _inject_emotion
     get_intuition_engine = _noop
     get_metacognition_engine = _noop
     get_persona_manager = _noop
@@ -83,7 +86,7 @@ class HumanMind:
         agent_name: str,
         base_prompt: str,
         query: str,
-        cognitive_state: Optional[CognitiveState] = None,
+        cognitive_state: CognitiveState | None = None,
         sid: str = "",
     ) -> tuple[str, bool]:
         """增强系统提示词，注入人类思维元素
@@ -140,7 +143,7 @@ class HumanMind:
         agent_name: str,
         query: str,
         raw_response: str,
-        cognitive_state: Optional[CognitiveState] = None,
+        cognitive_state: CognitiveState | None = None,
         had_monologue: bool = False,
         sid: str = "",
     ) -> str:
@@ -237,7 +240,7 @@ def enhance_agent_prompt(
     agent_name: str,
     base_prompt: str,
     query: str = "",
-    cognitive_state: Optional[CognitiveState] = None,
+    cognitive_state: CognitiveState | None = None,
     sid: str = "",
 ) -> tuple[str, bool]:
     """便捷函数：增强agent提示词"""
@@ -249,7 +252,7 @@ def process_agent_response(
     agent_name: str,
     query: str,
     raw_response: str,
-    cognitive_state: Optional[CognitiveState] = None,
+    cognitive_state: CognitiveState | None = None,
     had_monologue: bool = False,
     sid: str = "",
 ) -> str:

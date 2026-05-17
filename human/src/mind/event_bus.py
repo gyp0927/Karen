@@ -4,11 +4,12 @@
 采用发布-订阅模式，支持事件驱动和状态驱动的混合通信
 """
 
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Any
 from datetime import datetime
 from enum import Enum
-import threading
+from typing import Any
 
 
 class SignalType(Enum):
@@ -28,8 +29,8 @@ class Signal:
     """信号 - 模块间通信的基本单元"""
     signal_type: SignalType
     source: str
-    target: List[str] = field(default_factory=list)
-    payload: Dict[str, Any] = field(default_factory=dict)
+    target: list[str] = field(default_factory=list)
+    payload: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.now)
     priority: int = 5                       # 1-10, 1最高
 
@@ -45,13 +46,13 @@ class EventBus:
     """
 
     def __init__(self):
-        self._subscribers: Dict[SignalType, List[Callable]] = {
+        self._subscribers: dict[SignalType, list[Callable]] = {
             st: [] for st in SignalType
         }
-        self._global_subscribers: List[Callable] = []  # 订阅所有事件
-        self._queue: List[Signal] = []
+        self._global_subscribers: list[Callable] = []  # 订阅所有事件
+        self._queue: list[Signal] = []
         self._lock = threading.Lock()
-        self._state_callbacks: Dict[str, List[Callable]] = {}  # 状态变化回调
+        self._state_callbacks: dict[str, list[Callable]] = {}  # 状态变化回调
 
     def subscribe(self, event_type: SignalType, callback: Callable[[Signal], None]):
         """订阅特定类型的事件"""
@@ -74,7 +75,7 @@ class EventBus:
         self._dispatch(signal)
 
     def publish_quick(self, signal_type: SignalType, source: str,
-                      target: List[str] = None, payload: Dict = None,
+                      target: list[str] = None, payload: dict = None,
                       priority: int = 5):
         """快捷发布方法"""
         signal = Signal(

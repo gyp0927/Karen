@@ -9,14 +9,13 @@ Phase 4: 决策与行动准备
 Phase 5: 元认知与输出
 """
 
-from typing import Dict, List, Optional, Any, Tuple
+import random
 from dataclasses import dataclass, field
 from datetime import datetime
-import random
 
 from .emotion_system import EmotionSystem
-from .memory_system import MemorySystem
 from .global_workspace import GlobalWorkspace, WorkspaceContent
+from .memory_system import MemorySystem
 from .metacognition import Metacognition
 
 
@@ -29,16 +28,16 @@ class ThinkingContext:
     phase: str = "idle"
 
     # 各阶段产物
-    perceptual_assessment: Dict = field(default_factory=dict)
-    activated_memories: List = field(default_factory=list)
-    workspace_contents: List = field(default_factory=list)
+    perceptual_assessment: dict = field(default_factory=dict)
+    activated_memories: list = field(default_factory=list)
+    workspace_contents: list = field(default_factory=list)
     reasoning_output: str = ""
     final_decision: str = ""
     output_text: str = ""
 
     # 时间戳
     start_time: datetime = field(default_factory=datetime.now)
-    phase_times: Dict = field(default_factory=dict)
+    phase_times: dict = field(default_factory=dict)
 
 
 class ThinkingProcess:
@@ -57,7 +56,7 @@ class ThinkingProcess:
         self.workspace = global_workspace
         self.metacognition = metacognition
 
-    def process(self, input_text: str, user_id: str = "default") -> Tuple[str, Dict]:
+    def process(self, input_text: str, user_id: str = "default") -> tuple[str, dict]:
         """
         处理输入，生成输出
 
@@ -103,7 +102,7 @@ class ThinkingProcess:
 
         return context.output_text, process_log
 
-    def _phase1_perception(self, ctx: ThinkingContext) -> Dict:
+    def _phase1_perception(self, ctx: ThinkingContext) -> dict:
         """
         Phase 1: 感知与初步评估
 
@@ -137,7 +136,7 @@ class ThinkingProcess:
         ctx.perceptual_assessment = result
         return result
 
-    def _extract_features(self, text: str) -> Dict:
+    def _extract_features(self, text: str) -> dict:
         """提取输入特征"""
         return {
             "length": len(text),
@@ -191,7 +190,7 @@ class ThinkingProcess:
         else:
             return "maintain_presence" # 维持在场
 
-    def _phase2_attention_memory(self, ctx: ThinkingContext) -> Dict:
+    def _phase2_attention_memory(self, ctx: ThinkingContext) -> dict:
         """
         Phase 2: 注意与记忆激活
 
@@ -254,7 +253,7 @@ class ThinkingProcess:
         else:
             return "general_content"
 
-    def _phase3_conscious_processing(self, ctx: ThinkingContext) -> Dict:
+    def _phase3_conscious_processing(self, ctx: ThinkingContext) -> dict:
         """
         Phase 3: 意识加工
 
@@ -348,7 +347,7 @@ class ThinkingProcess:
 
         return "; ".join(understanding_parts)
 
-    def _phase4_decision(self, ctx: ThinkingContext) -> Dict:
+    def _phase4_decision(self, ctx: ThinkingContext) -> dict:
         """
         Phase 4: 决策与行动准备
 
@@ -378,7 +377,7 @@ class ThinkingProcess:
         ctx.final_decision = best[0]
         return result
 
-    def _generate_response_options(self, ctx: ThinkingContext) -> List[str]:
+    def _generate_response_options(self, ctx: ThinkingContext) -> list[str]:
         """生成回应策略选项"""
         options = []
 
@@ -403,7 +402,7 @@ class ThinkingProcess:
 
         return options
 
-    def _evaluate_options(self, options: List[str], ctx: ThinkingContext) -> List[Tuple[str, float]]:
+    def _evaluate_options(self, options: list[str], ctx: ThinkingContext) -> list[tuple[str, float]]:
         """评估各选项"""
         scored = []
 
@@ -428,7 +427,7 @@ class ThinkingProcess:
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored
 
-    def _phase5_metacognition_output(self, ctx: ThinkingContext) -> Dict:
+    def _phase5_metacognition_output(self, ctx: ThinkingContext) -> dict:
         """
         Phase 5: 元认知与输出
 

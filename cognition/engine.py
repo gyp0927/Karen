@@ -13,15 +13,21 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional, TypeVar
-
-T = TypeVar("T")
+from typing import TypeVar
 
 from cognition.types import (
-    CognitiveState, EmotionalState, InnerThought, IntuitionResult,
-    MetacognitionResult, Mood, PersonaConfig, ThinkingMode,
+    CognitiveState,
+    EmotionalState,
+    IntuitionResult,
+    MetacognitionResult,
+    Mood,
+    PersonaConfig,
+    ThinkingMode,
 )
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +68,7 @@ class EmotionalStateManager:
 
     def update_after_interaction(
         self, agent_name: str, success: bool = True, complexity: float = 0.5,
-        user_emotion_hint: Optional[str] = None,
+        user_emotion_hint: str | None = None,
         sid: str = "",
     ) -> EmotionalState:
         state = self.get_state(agent_name, sid=sid)
@@ -151,7 +157,7 @@ class InnerMonologueEngine:
 <answer>[正式回答]</answer>
 """
 
-    def extract_thought_and_answer(self, raw_response: str) -> tuple[Optional[str], str]:
+    def extract_thought_and_answer(self, raw_response: str) -> tuple[str | None, str]:
         think_match = re.search(r"<think>(.*?)</think>", raw_response, re.DOTALL)
         answer_match = re.search(r"<answer>(.*?)</answer>", raw_response, re.DOTALL)
         if think_match and answer_match:

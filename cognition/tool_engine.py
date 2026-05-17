@@ -8,11 +8,11 @@
 import asyncio
 import logging
 import os
-from typing import Any, Callable, Optional
-from typing import Optional, Any
+from collections.abc import Callable
+from typing import Any
 
-from langchain_core.tools import tool, BaseTool
-from langchain_core.messages import ToolMessage, AIMessage
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool, tool
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ async def memory_search(query: str) -> str:
         相关记忆内容，如果没有找到则返回空字符串
     """
     try:
-        from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
+        from core.memory_client import _MEMORY_SYSTEM_AVAILABLE, get_memory_store
         if not _MEMORY_SYSTEM_AVAILABLE:
             return ""
         store = get_memory_store()
@@ -176,7 +176,7 @@ async def run_tool_loop(
     tools: list[BaseTool],
     max_iterations: int = 3,
     sid: str = "",
-    on_token: Optional[Callable[[str], Any]] = None,
+    on_token: Callable[[str], Any] | None = None,
 ) -> str:
     """执行工具调用循环。
 
@@ -236,7 +236,7 @@ async def run_tool_loop(
 async def _stream_final_response(
     llm_with_tools,
     messages: list,
-    on_token: Optional[Callable[[str], Any]],
+    on_token: Callable[[str], Any] | None,
     sid: str = "",
 ) -> str:
     """最终流式输出响应。"""

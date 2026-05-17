@@ -19,7 +19,6 @@ from hot_and_cold_memory.ingestion.embedder import Embedder
 from hot_and_cold_memory.monitoring.metrics import MIGRATION_DURATION, MIGRATION_TOTAL
 from hot_and_cold_memory.storage.metadata_store.base import (
     BaseMetadataStore,
-    MemoryItem,
     MigrationLog,
 )
 from hot_and_cold_memory.tiers.base import MemoryEntry, RetrievedMemory

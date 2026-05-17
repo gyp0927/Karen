@@ -140,7 +140,7 @@ class Embedder:
                 asyncio.to_thread(_load),
                 timeout=_MODEL_LOAD_TIMEOUT,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(
                 "local_embedding_model_load_timeout",
                 timeout=_MODEL_LOAD_TIMEOUT,

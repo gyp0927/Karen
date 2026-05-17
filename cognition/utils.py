@@ -1,28 +1,29 @@
 """认知系统工具函数——减少重复的单例模式和序列化逻辑"""
-from typing import TypeVar, Optional, Callable, Any
+from collections.abc import Callable
 from dataclasses import asdict
+from typing import TypeVar
 
 from cognition.types import (
     CognitiveState,
     EmotionalState,
-    Mood,
-    ThinkingMode,
     InnerThought,
     MetacognitionResult,
+    Mood,
     PersonaConfig,
+    ThinkingMode,
 )
 
 T = TypeVar("T")
 
 
-def singleton(factory: type[T]) -> tuple[Optional[T], Callable[..., T]]:
+def singleton(factory: type[T]) -> tuple[T | None, Callable[..., T]]:
     """创建单例模式和获取函数。
 
     返回 (instance_ref, get_instance)，其中 get_instance 是闭包函数。
     用法：
         _instance, get_instance = singleton(MyClass)
     """
-    _inst: Optional[T] = None
+    _inst: T | None = None
 
     def get_instance(*args, **kwargs) -> T:
         nonlocal _inst

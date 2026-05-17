@@ -1,9 +1,11 @@
 import asyncio
-import time
 import sys
+import time
+
 sys.path.insert(0, "E:/果冻ai-memory/多agent聊天")
 
 from langchain_core.messages import HumanMessage
+
 
 # 使用 mock 搜索，排除网络波动
 async def mock_web_searcher(query):
@@ -16,8 +18,8 @@ async def mock_tool_caller(state):
     return {"messages": []}
 
 async def benchmark_fast():
-    from graph.orchestrator import create_fast_graph
     from agents.nodes import responder_node
+    from graph.orchestrator import create_fast_graph
 
     graph = create_fast_graph(mock_web_searcher, mock_memory_searcher, mock_tool_caller, responder_node)
     state = {
@@ -40,8 +42,8 @@ async def benchmark_fast():
     return time.time() - t0
 
 async def benchmark_coordination():
-    from graph.orchestrator import create_coordination_graph
     from agents.nodes import coordinator_node, researcher_node, responder_node
+    from graph.orchestrator import create_coordination_graph
 
     graph = create_coordination_graph(coordinator_node, researcher_node, mock_tool_caller, responder_node)
     state = {

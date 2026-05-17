@@ -7,9 +7,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
 from datetime import datetime
-import heapq
 
 
 @dataclass
@@ -38,11 +36,11 @@ class GlobalWorkspace:
     CAPACITY = 2    # 一次能容纳的主要内容数
 
     def __init__(self):
-        self.contents: List[WorkspaceContent] = []
-        self.attention_focus: Optional[str] = None
-        self.broadcast_history: List[Dict] = []
+        self.contents: list[WorkspaceContent] = []
+        self.attention_focus: str | None = None
+        self.broadcast_history: list[dict] = []
 
-    def compete(self, candidates: List[WorkspaceContent]) -> List[WorkspaceContent]:
+    def compete(self, candidates: list[WorkspaceContent]) -> list[WorkspaceContent]:
         """
         竞争进入工作空间
 
@@ -103,17 +101,17 @@ class GlobalWorkspace:
         # 如果超过容量，移除最低显著性的
         if len(self.contents) > self.CAPACITY:
             self.contents.sort(key=lambda c: c.salience)
-            removed = self.contents.pop(0)
+            _removed = self.contents.pop(0)
             # 被移除的内容"淡出"意识
 
         # 广播
         self._broadcast(item)
 
-    def get_current_contents(self) -> List[str]:
+    def get_current_contents(self) -> list[str]:
         """获取当前意识内容"""
         return [c.content for c in self.contents]
 
-    def get_focus(self) -> Optional[str]:
+    def get_focus(self) -> str | None:
         """获取当前注意力焦点"""
         return self.attention_focus
 
@@ -122,7 +120,7 @@ class GlobalWorkspace:
         self.contents = []
         self.attention_focus = None
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "contents": self.get_current_contents(),
             "attention_focus": self.attention_focus,

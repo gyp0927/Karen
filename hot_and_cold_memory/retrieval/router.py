@@ -7,7 +7,7 @@ from typing import Any
 
 from hot_and_cold_memory.core.config import RoutingStrategy, Tier, get_settings
 from hot_and_cold_memory.core.logging import get_logger
-from hot_and_cold_memory.frequency.tracker import FrequencyTracker, TopicFrequencyInfo
+from hot_and_cold_memory.frequency.tracker import FrequencyTracker
 from hot_and_cold_memory.ingestion.embedder import Embedder
 from hot_and_cold_memory.monitoring.metrics import QUERY_DURATION, QUERY_TOTAL
 from hot_and_cold_memory.tiers.base import RetrievedMemory
@@ -137,7 +137,7 @@ class FrequencyRouter:
                     ),
                     timeout=_COLD_RETRIEVE_TIMEOUT,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("cold_tier_retrieve_timeout", query=query_text[:50])
                 cold_results = []
         elif strategy == RoutingStrategy.HOT_FIRST:
@@ -157,7 +157,7 @@ class FrequencyRouter:
                         ),
                         timeout=_COLD_RETRIEVE_TIMEOUT,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("cold_tier_retrieve_timeout", query=query_text[:50])
                     cold_results = []
         elif strategy == RoutingStrategy.BOTH:
