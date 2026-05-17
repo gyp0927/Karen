@@ -24,14 +24,14 @@ def _parse_pdf(file_path: str) -> str:
     兼容旧环境时回退到 PyPDF2。"""
     try:
         try:
-            from pypdf import PdfReader as _PdfReader
+            import pypdf
+            _PdfReader = pypdf.PdfReader
         except ImportError:
-            from PyPDF2 import PdfReader
-
-            _PdfReader = PdfReader
+            import PyPDF2
+            _PdfReader = PyPDF2.PdfReader
         parts = []
         with open(file_path, "rb") as f:
-            reader = PdfReader(f)
+            reader = _PdfReader(f)
             for page in reader.pages:
                 page_text = page.extract_text()
                 if page_text:
