@@ -34,8 +34,16 @@ def _get_http_async_client():
     with _httpx_lock:
         client = _httpx_clients.get(key)
         if client is not None:
-            _httpx_clients.move_to_end(key)
-            return client
+            # 安全校验：client 绑定的 loop 必须是当前运行中的 loop
+            # 线程 ID 重用或 loop 被关闭后重建时，旧 client 会失效
+            try:
+                if getattr(client, "_loop", None) is loop:
+                    _httpx_clients.move_to_end(key)
+                    return client
+            except Exception:
+                pass
+            # 校验失败：从缓存中移除旧 client，后续创建新实例
+            _httpx_clients.pop(key, None)
         try:
             import httpx
             client = httpx.AsyncClient(
