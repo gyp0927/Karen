@@ -14,7 +14,9 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, TypeVar
+
+T = TypeVar("T")
 
 from cognition.types import (
     CognitiveState, EmotionalState, InnerThought, IntuitionResult,
@@ -486,11 +488,11 @@ REVIEWER_PERSONA = PersonaConfig(
 _instances: dict[str, object] = {}
 
 
-def _get_instance(key: str, factory: Callable) -> object:
+def _get_instance(key: str, factory: Callable[[], T]) -> T:
     """统一单例获取。"""
     if key not in _instances:
         _instances[key] = factory()
-    return _instances[key]
+    return _instances[key]  # type: ignore[return-value]
 
 
 def get_emotional_manager() -> EmotionalStateManager:

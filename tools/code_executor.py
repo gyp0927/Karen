@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import traceback
-from typing import Optional
 
 try:
     import resource
@@ -21,7 +20,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # AST 检查结果缓存：相同代码不必重复解析（LRU，最多 128 条）
-_ast_check_cache: "dict[str, tuple[bool, Optional[SecurityError]]]" = {}
+_ast_check_cache: "dict[str, tuple[bool, SecurityError | None]]" = {}
 _AST_CACHE_MAX = 128
 
 # 禁止导入的危险模块
@@ -184,12 +183,12 @@ def _set_resource_limits(timeout: int):
         return
     try:
         # CPU 时间限制（硬限制 = 软限制 = timeout）
-        resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
+        resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))  # type: ignore[attr-defined]
         # 内存限制 512MB
-        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))  # type: ignore[attr-defined]
         # 文件句柄限制 64
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-    except (OSError, ValueError) as e:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))  # type: ignore[attr-defined]
+    except (OSError, ValueError):
         # 某些平台可能不支持某些 limit，忽略错误
         pass
 
@@ -239,7 +238,9 @@ def execute_python(code: str, timeout: int = 30) -> dict:
         "PYTHONDONTWRITEBYTECODE": "1",
         "SYSTEMROOT": os.getenv("SYSTEMROOT", ""),  # Windows 上某些库需要
     }
-    run_kwargs = {
+    from typing import Any
+
+    run_kwargs: dict[str, Any] = {
         "input": code,
         "capture_output": True,
         "text": True,

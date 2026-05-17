@@ -8,7 +8,6 @@ import importlib.util
 import json
 import logging
 import os
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +51,8 @@ class PluginRegistry:
     """插件注册表，负责扫描、加载和管理插件。"""
 
     _instance = None
+    _plugins: dict[str, Plugin]
+    _enabled: set[str]
 
     def __new__(cls):
         if cls._instance is None:
@@ -66,7 +67,7 @@ class PluginRegistry:
         """从 enabled.json 加载启用状态。"""
         if os.path.exists(_ENABLED_FILE):
             try:
-                with open(_ENABLED_FILE, "r", encoding="utf-8") as f:
+                with open(_ENABLED_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 self._enabled = set(data.get("enabled", []))
             except Exception:
@@ -96,6 +97,7 @@ class PluginRegistry:
         # 注册 MCP 工具为插件
         try:
             from core.mcp_plugin_adapter import register_mcp_plugins
+
             register_mcp_plugins()
         except Exception:
             pass
@@ -107,7 +109,7 @@ class PluginRegistry:
         module_name = os.path.splitext(os.path.basename(filepath))[0]
         try:
             # 安全扫描：先读取文件内容，进行 AST 安全检查
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8") as f:
                 source = f.read()
             if not self._scan_plugin_ast(source, filepath):
                 return
@@ -121,8 +123,12 @@ class PluginRegistry:
             # 查找模块中继承 Plugin 的类
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
-                if (isinstance(attr, type) and issubclass(attr, Plugin)
-                        and attr is not Plugin and not getattr(attr, "__abstractmethods__", None)):
+                if (
+                    isinstance(attr, type)
+                    and issubclass(attr, Plugin)
+                    and attr is not Plugin
+                    and not getattr(attr, "__abstractmethods__", None)
+                ):
                     try:
                         instance = attr()
                         self._plugins[instance.name] = instance
@@ -138,13 +144,15 @@ class PluginRegistry:
         """列出所有插件信息。"""
         result = []
         for name, plugin in self._plugins.items():
-            result.append({
-                "name": plugin.name,
-                "description": plugin.description,
-                "version": plugin.version,
-                "enabled": name in self._enabled,
-                "schema": plugin.get_schema(),
-            })
+            result.append(
+                {
+                    "name": plugin.name,
+                    "description": plugin.description,
+                    "version": plugin.version,
+                    "enabled": name in self._enabled,
+                    "schema": plugin.get_schema(),
+                }
+            )
         return sorted(result, key=lambda x: x["name"])
 
     def get_plugin(self, name: str) -> Plugin | None:
@@ -179,22 +187,65 @@ class PluginRegistry:
         return plugin.execute(args)
 
     # 插件 AST 扫描的常量集合（类属性，避免每次扫描都重建）
-    _FORBIDDEN_MODULES = frozenset({
-        "os", "sys", "subprocess", "ctypes", "socket",
-        "urllib", "http", "pickle", "marshal", "shutil",
-        "pathlib", "tempfile", "multiprocessing", "builtins",
-        "io", "operator", "inspect", "types", "code", "codeop",
-    })
-    _FORBIDDEN_CALLS = frozenset({
-        "eval", "exec", "compile", "open", "input", "__import__",
-        "getattr", "setattr", "delattr", "globals", "locals", "vars",
-        "attrgetter", "itemgetter", "methodcaller",
-    })
-    _FORBIDDEN_ATTRS = frozenset({
-        "__class__", "__bases__", "__base__", "__subclasses__",
-        "__mro__", "__globals__", "__builtins__", "__dict__",
-        "__code__", "__closure__", "f_globals", "f_locals",
-    })
+    _FORBIDDEN_MODULES = frozenset(
+        {
+            "os",
+            "sys",
+            "subprocess",
+            "ctypes",
+            "socket",
+            "urllib",
+            "http",
+            "pickle",
+            "marshal",
+            "shutil",
+            "pathlib",
+            "tempfile",
+            "multiprocessing",
+            "builtins",
+            "io",
+            "operator",
+            "inspect",
+            "types",
+            "code",
+            "codeop",
+        }
+    )
+    _FORBIDDEN_CALLS = frozenset(
+        {
+            "eval",
+            "exec",
+            "compile",
+            "open",
+            "input",
+            "__import__",
+            "getattr",
+            "setattr",
+            "delattr",
+            "globals",
+            "locals",
+            "vars",
+            "attrgetter",
+            "itemgetter",
+            "methodcaller",
+        }
+    )
+    _FORBIDDEN_ATTRS = frozenset(
+        {
+            "__class__",
+            "__bases__",
+            "__base__",
+            "__subclasses__",
+            "__mro__",
+            "__globals__",
+            "__builtins__",
+            "__dict__",
+            "__code__",
+            "__closure__",
+            "f_globals",
+            "f_locals",
+        }
+    )
 
     def _scan_plugin_ast(self, source: str, filepath: str) -> bool:
         """对插件源码进行 AST 安全检查。

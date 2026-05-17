@@ -21,9 +21,7 @@ EMBEDDER_WARMUP_TIMEOUT_S = 60.0
 # defines MEMORY_STORE_PATH. We set a fallback env var before importing so
 # that Pydantic Settings picks it up.
 if not os.environ.get("DOCUMENT_STORE_PATH"):
-    os.environ["DOCUMENT_STORE_PATH"] = os.environ.get(
-        "MEMORY_STORE_PATH", "./data/memories"
-    )
+    os.environ["DOCUMENT_STORE_PATH"] = os.environ.get("MEMORY_STORE_PATH", "./data/memories")
 
 # Memory system imports (may fail if deps are missing – guarded in __init__)
 _import_err: Exception | None = None
@@ -52,9 +50,8 @@ except Exception as _e:  # pragma: no cover
 # ---------------------------------------------------------------------------
 # SQLite fallback memory store (当完整记忆系统依赖缺失时降级使用)
 # ---------------------------------------------------------------------------
-import sqlite3 as _sqlite3
-import uuid as _uuid
-import time as _time
+import time as _time  # noqa: E402
+import uuid as _uuid  # noqa: E402
 
 
 class _SQLiteMemoryFallback:
@@ -80,7 +77,9 @@ class _SQLiteMemoryFallback:
 
     def __init__(self) -> None:
         import threading
+
         from core.db_utils import get_sqlite_conn
+
         os.makedirs(os.path.dirname(self._DB_PATH), exist_ok=True)
         self._lock = threading.RLock()
         with self._lock:
@@ -97,6 +96,7 @@ class _SQLiteMemoryFallback:
     def _get_conn(self):
         """获取线程本地持久连接。"""
         from core.db_utils import get_sqlite_conn
+
         return get_sqlite_conn(self._DB_PATH, enable_wal=True, use_thread_local=True, check_same_thread=False)
 
     async def retrieve(
@@ -147,9 +147,11 @@ class _SQLiteMemoryFallback:
         with self._lock:
             conn = self._get_conn()
             mid = str(_uuid.uuid4())
+            import json as _json
+
             conn.execute(
                 "INSERT INTO memories (memory_id, content, memory_type, source, importance, tags, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (mid, content, memory_type, source, importance, json.dumps(tags or []), _time.time()),
+                (mid, content, memory_type, source, importance, _json.dumps(tags or []), _time.time()),
             )
             conn.commit()
             return {"memory_id": mid, "status": "created", "tier": "cold"}
@@ -206,8 +208,7 @@ def get_memory_store():
                     _store_instance = AgentMemoryStore()
                 else:
                     logger.warning(
-                        "Memory system dependencies missing, falling back to SQLite. "
-                        f"Import error: {_import_err}"
+                        f"Memory system dependencies missing, falling back to SQLite. Import error: {_import_err}"
                     )
                     _store_instance = _SQLiteMemoryFallback()
     return _store_instance
@@ -225,10 +226,7 @@ class AgentMemoryStore:
 
     def __init__(self) -> None:
         if not _MEMORY_SYSTEM_AVAILABLE:
-            raise RuntimeError(
-                "Memory system dependencies are not available. "
-                f"Import error: {_import_err}"
-            )
+            raise RuntimeError(f"Memory system dependencies are not available. Import error: {_import_err}")
 
         self._services: dict[str, Any] = {}
         self._initialized = False
@@ -339,7 +337,8 @@ class AgentMemoryStore:
                     logger.error(
                         "Embedding dimension mismatch: model returns %d, "
                         "EMBEDDING_DIMENSION=%d. 切模型后请清空 ./data/qdrant_storage 并重启。",
-                        len(actual), settings.EMBEDDING_DIMENSION,
+                        len(actual),
+                        settings.EMBEDDING_DIMENSION,
                     )
             except Exception as e:
                 logger.warning(f"Dimension check skipped: {e}")
@@ -349,7 +348,7 @@ class AgentMemoryStore:
             try:
                 await asyncio.wait_for(embedder.embed("warmup"), timeout=EMBEDDER_WARMUP_TIMEOUT_S)
                 logger.info("Embedder warmed up")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"Embedder warmup timed out (>{EMBEDDER_WARMUP_TIMEOUT_S}s)")
             except Exception as e:
                 logger.warning(f"Embedder warmup failed: {e}")

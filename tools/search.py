@@ -15,7 +15,6 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

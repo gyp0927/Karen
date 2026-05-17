@@ -4,11 +4,12 @@ import sys
 import threading
 import traceback
 from pathlib import Path
+from typing import Any
 
 # 设置项目根目录
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-results = []
+results: list[dict[str, Any]] = []
 
 def test(name):
     def decorator(func):

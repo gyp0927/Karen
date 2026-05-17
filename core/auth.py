@@ -19,12 +19,12 @@ import time
 
 try:
     import bcrypt
+
     _BCRYPT_AVAILABLE = True
 except ImportError:
     _BCRYPT_AVAILABLE = False
 import uuid
 from functools import wraps
-from typing import Optional
 
 from flask import request, session
 
@@ -68,7 +68,7 @@ def _get_admin_password() -> str:
     if env_pwd:
         return env_pwd
     if os.path.exists(_ADMIN_PASSWORD_FILE):
-        with open(_ADMIN_PASSWORD_FILE, "r", encoding="utf-8") as f:
+        with open(_ADMIN_PASSWORD_FILE, encoding="utf-8") as f:
             return f.read().strip()
     # 生成随机密码并持久化
     random_pwd = secrets.token_urlsafe(16)
@@ -136,6 +136,7 @@ def _record_auth_failure(ip: str) -> None:
 
 def _get_conn() -> sqlite3.Connection:
     from core.db_utils import get_sqlite_conn
+
     return get_sqlite_conn(_DB_PATH, enable_wal=False, use_thread_local=True)
 
 
@@ -222,7 +223,7 @@ def create_user(name: str, api_key: str, config: dict = None, role: str = "user"
             now = time.time()
             conn.execute(
                 "INSERT INTO users (id, name, api_key_hash, key_salt, password_hash, config_json, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (user_id, name, key_hash, key_salt, password_hash, json.dumps(config or {}), role, now)
+                (user_id, name, key_hash, key_salt, password_hash, json.dumps(config or {}), role, now),
             )
             conn.commit()
             logger.info(f"Created user: {user_id} ({name}) role={role}")
@@ -233,7 +234,7 @@ def create_user(name: str, api_key: str, config: dict = None, role: str = "user"
             conn.close()
 
 
-def authenticate(api_key: str, ip: str = "") -> Optional[User]:
+def authenticate(api_key: str, ip: str = "") -> User | None:
     """验证 API Key,返回用户对象。
 
     ip 用于触发 per-IP 失败次数限流,防止 API Key 暴力枚举。
@@ -253,8 +254,7 @@ def authenticate(api_key: str, ip: str = "") -> Optional[User]:
             # 1. 尝试旧版纯 SHA256（无 salt 的用户）
             legacy_hash = _legacy_hash(api_key)
             cursor = conn.execute(
-                "SELECT id, name, config_json, role, key_salt FROM users WHERE api_key_hash = ?",
-                (legacy_hash,)
+                "SELECT id, name, config_json, role, key_salt FROM users WHERE api_key_hash = ?", (legacy_hash,)
             )
             row = cursor.fetchone()
 
@@ -289,7 +289,7 @@ def authenticate(api_key: str, ip: str = "") -> Optional[User]:
     return None
 
 
-def authenticate_password(name: str, password: str, ip: str = "") -> Optional[User]:
+def authenticate_password(name: str, password: str, ip: str = "") -> User | None:
     """通过用户名和密码验证用户。
 
     ip 用于触发 per-IP 失败次数限流，防止密码暴力破解。
@@ -305,8 +305,7 @@ def authenticate_password(name: str, password: str, ip: str = "") -> Optional[Us
         conn = _get_conn()
         try:
             cursor = conn.execute(
-                "SELECT id, name, config_json, role, password_hash FROM users WHERE name = ?",
-                (name,)
+                "SELECT id, name, config_json, role, password_hash FROM users WHERE name = ?", (name,)
             )
             row = cursor.fetchone()
             if row and row["password_hash"] and _check_password(password, row["password_hash"]):
@@ -329,15 +328,12 @@ def authenticate_password(name: str, password: str, ip: str = "") -> Optional[Us
     return None
 
 
-def get_user_by_id(user_id: str) -> Optional[User]:
+def get_user_by_id(user_id: str) -> User | None:
     """通过 ID 获取用户。"""
     with _lock:
         conn = _get_conn()
         try:
-            cursor = conn.execute(
-                "SELECT id, name, config_json, role FROM users WHERE id = ?",
-                (user_id,)
-            )
+            cursor = conn.execute("SELECT id, name, config_json, role FROM users WHERE id = ?", (user_id,))
             row = cursor.fetchone()
             if row:
                 return User(
@@ -356,9 +352,7 @@ def list_users() -> list[dict]:
     with _lock:
         conn = _get_conn()
         try:
-            cursor = conn.execute(
-                "SELECT id, name, role, created_at FROM users ORDER BY created_at DESC"
-            )
+            cursor = conn.execute("SELECT id, name, role, created_at FROM users ORDER BY created_at DESC")
             return [
                 {
                     "id": row["id"],
@@ -389,10 +383,7 @@ def update_user_config(user_id: str, config: dict) -> bool:
     with _lock:
         conn = _get_conn()
         try:
-            cursor = conn.execute(
-                "UPDATE users SET config_json = ? WHERE id = ?",
-                (json.dumps(config), user_id)
-            )
+            cursor = conn.execute("UPDATE users SET config_json = ? WHERE id = ?", (json.dumps(config), user_id))
             conn.commit()
             return cursor.rowcount > 0
         finally:
@@ -406,6 +397,7 @@ def auth_required(f):
     优先检查 Session 认证（session["user_id"]），回退到 API Key 认证。
     对于修改性操作（POST/PUT/DELETE/PATCH）使用 API Key 时强制要求 Header 认证，防止 CSRF。
     """
+
     @wraps(f)
     def decorated(*args, **kwargs):
         if not AUTH_ENABLED:
@@ -433,6 +425,7 @@ def auth_required(f):
         # 将用户对象附加到请求上下文
         request.current_user = user
         return f(*args, **kwargs)
+
     return decorated
 
 
@@ -442,6 +435,7 @@ def admin_required(f):
     要求用户已认证且 role 为 admin。
     认证未启用时直接放行。
     """
+
     @wraps(f)
     def decorated(*args, **kwargs):
         if not AUTH_ENABLED:
@@ -467,10 +461,11 @@ def admin_required(f):
 
         request.current_user = user
         return f(*args, **kwargs)
+
     return decorated
 
 
-def get_current_user() -> Optional[User]:
+def get_current_user() -> User | None:
     """获取当前请求的用户（在 auth_required 装饰器保护的路由中可用）。"""
     if not AUTH_ENABLED:
         return None

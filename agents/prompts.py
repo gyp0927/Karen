@@ -57,6 +57,7 @@ def get_reviewer_prompt(language: str = "zh") -> str:
 
 # ========== Responder 提示词 ==========
 
+
 def build_responder_prompt(plugin_prompt: str, lang_instr: str) -> str:
     """构建 Responder 的系统提示词。"""
     # 将用户注入内容中的 { } 转义为 {{ }}，防止 f-string 将其误认为格式占位符

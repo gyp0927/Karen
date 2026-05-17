@@ -10,10 +10,6 @@ import json
 import logging
 import os
 import re
-from functools import lru_cache
-from typing import Optional
-
-from langchain_core.messages import BaseMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -28,35 +24,108 @@ _COMPLEXITY_WEIGHTS = {
     "greeting_keywords": -2,
     "simple_keywords": -1,
     "length_factor": 0.01,  # 每超出一个字符加多少分
-    "turn_factor": 0.5,     # 每多一轮对话加多少分
+    "turn_factor": 0.5,  # 每多一轮对话加多少分
 }
 
 # 关键词分类
 _KEYWORD_PATTERNS = {
     "code_keywords": [
-        "代码", "编程", "程序", "debug", "调试", "算法", "函数", "类", "接口",
-        "写代码", "python", "java", "javascript", "c++", "go", "rust",
-        "报错", "异常", "error", "bug", "fix", "实现", "重构",
+        "代码",
+        "编程",
+        "程序",
+        "debug",
+        "调试",
+        "算法",
+        "函数",
+        "类",
+        "接口",
+        "写代码",
+        "python",
+        "java",
+        "javascript",
+        "c++",
+        "go",
+        "rust",
+        "报错",
+        "异常",
+        "error",
+        "bug",
+        "fix",
+        "实现",
+        "重构",
     ],
     "analysis_keywords": [
-        "分析", "解释", "说明", "为什么", "原因", "原理", "机制",
-        "evaluate", "analyze", "explain", "reason", "cause",
+        "分析",
+        "解释",
+        "说明",
+        "为什么",
+        "原因",
+        "原理",
+        "机制",
+        "evaluate",
+        "analyze",
+        "explain",
+        "reason",
+        "cause",
     ],
     "comparison_keywords": [
-        "比较", "对比", "区别", "差异", "vs", "versus",
-        "compare", "difference", "better", "worse",
+        "比较",
+        "对比",
+        "区别",
+        "差异",
+        "vs",
+        "versus",
+        "compare",
+        "difference",
+        "better",
+        "worse",
     ],
     "creative_keywords": [
-        "写", "创作", "生成", "设计", "创意", "故事", "文章", "诗歌",
-        "write", "create", "generate", "design", "creative", "story",
+        "写",
+        "创作",
+        "生成",
+        "设计",
+        "创意",
+        "故事",
+        "文章",
+        "诗歌",
+        "write",
+        "create",
+        "generate",
+        "design",
+        "creative",
+        "story",
     ],
     "greeting_keywords": [
-        "你好", "您好", "嗨", "hello", "hi", "hey", "早上好", "下午好", "晚上好",
-        "再见", "拜拜", "bye", "谢谢", "感谢",
+        "你好",
+        "您好",
+        "嗨",
+        "hello",
+        "hi",
+        "hey",
+        "早上好",
+        "下午好",
+        "晚上好",
+        "再见",
+        "拜拜",
+        "bye",
+        "谢谢",
+        "感谢",
     ],
     "simple_keywords": [
-        "是", "否", "对", "错", "好的", "ok", "行", "可以",
-        "yes", "no", "ok", "sure", "maybe",
+        "是",
+        "否",
+        "对",
+        "错",
+        "好的",
+        "ok",
+        "行",
+        "可以",
+        "yes",
+        "no",
+        "ok",
+        "sure",
+        "maybe",
     ],
 }
 
@@ -154,20 +223,60 @@ class ModelRouter:
     # powerful 档目前指向编码专用模型（kimi-for-coding），
     # 对非编码问题会静默返回空响应。所以 powerful 档要再加一层"是否真编码意图"判断。
     _CODING_VERBS = (
-        "写代码", "写一段", "写一个", "写个", "实现", "重构", "调试", "debug",
-        "修复", "修一下", "修一个", "改一下", "改个 bug",
-        "优化", "测试用例", "单元测试", "重写", "解析", "parse",
-        "implement", "rewrite", "refactor", "optimize", "fix this",
+        "写代码",
+        "写一段",
+        "写一个",
+        "写个",
+        "实现",
+        "重构",
+        "调试",
+        "debug",
+        "修复",
+        "修一下",
+        "修一个",
+        "改一下",
+        "改个 bug",
+        "优化",
+        "测试用例",
+        "单元测试",
+        "重写",
+        "解析",
+        "parse",
+        "implement",
+        "rewrite",
+        "refactor",
+        "optimize",
+        "fix this",
     )
     _ERROR_KWS = (
-        "报错", "异常", "栈追踪", "stacktrace", "traceback",
-        "exception", "core dump", "segfault",
+        "报错",
+        "异常",
+        "栈追踪",
+        "stacktrace",
+        "traceback",
+        "exception",
+        "core dump",
+        "segfault",
     )
     # 出现这些"讨论性"词汇时，即使匹配到了 python/java 等语言名，也判定为非编码
     _DISCUSSION_MARKERS = (
-        "哪个", "哪种", "更好", "更适合", "对比", "区别", "差异",
-        "vs", "versus", "compare", "difference", "better than", "worse than",
-        "推荐", "建议", "选哪个", "选什么",
+        "哪个",
+        "哪种",
+        "更好",
+        "更适合",
+        "对比",
+        "区别",
+        "差异",
+        "vs",
+        "versus",
+        "compare",
+        "difference",
+        "better than",
+        "worse than",
+        "推荐",
+        "建议",
+        "选哪个",
+        "选什么",
     )
 
     def __init__(self, enabled: bool = True):
@@ -216,7 +325,7 @@ class ModelRouter:
                 mtime = os.path.getmtime(_CONFIG_FILE)
                 if mtime <= self._tiers_mtime and self._tiers:
                     return  # 文件未修改，跳过
-                with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+                with open(_CONFIG_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 for tier in ["light", "default", "powerful"]:
                     if tier in data:
@@ -281,6 +390,7 @@ class ModelRouter:
             base_url = result[tier].get("baseUrl", "")
             if base_url and "@" in base_url:
                 from urllib.parse import urlparse, urlunparse
+
                 parsed = urlparse(base_url)
                 if parsed.password:
                     # 替换密码部分为 ****
@@ -335,7 +445,7 @@ class ModelRouter:
 
 
 # 全局路由器实例
-_router_instance: Optional[ModelRouter] = None
+_router_instance: ModelRouter | None = None
 
 
 def get_router() -> ModelRouter:

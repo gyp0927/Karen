@@ -8,6 +8,7 @@
 import asyncio
 import logging
 import os
+from typing import Any, Callable, Optional
 from typing import Optional, Any
 
 from langchain_core.tools import tool, BaseTool
@@ -173,7 +174,7 @@ async def run_tool_loop(
     tools: list[BaseTool],
     max_iterations: int = 3,
     sid: str = "",
-    on_token: Optional[callable] = None,
+    on_token: Optional[Callable[[str], Any]] = None,
 ) -> str:
     """执行工具调用循环。
 
@@ -233,7 +234,7 @@ async def run_tool_loop(
 async def _stream_final_response(
     llm_with_tools,
     messages: list,
-    on_token: Optional[callable],
+    on_token: Optional[Callable[[str], Any]],
     sid: str = "",
 ) -> str:
     """最终流式输出响应。"""

@@ -3,20 +3,20 @@
 将 socket 级状态（会话、配置、图实例）集中管理，
 与 HTTP/SocketIO 事件处理器解耦，便于测试和维护。
 """
+
 import asyncio
 import logging
 import threading
 import time
 
-from agents.llm import clear_streaming_callback, cleanup_llm_config
+from agents.llm import cleanup_llm_config, clear_streaming_callback
 from agents.nodes import create_agents
+from core.config import SOCKET_INACTIVE_TIMEOUT
+from core.memory_client import _MEMORY_SYSTEM_AVAILABLE, get_memory_store
 from graph.orchestrator import create_fast_graph
 from state.manager import SessionManager
-from state.stop_flag import set_stop, is_stopped, cleanup_sid
-
-from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
-from core.config import SOCKET_INACTIVE_TIMEOUT
 from state.model_config_manager import get_active_config
+from state.stop_flag import cleanup_sid, set_stop
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class SocketState:
         self.detected_language: str | None = None
         self.last_active = time.time()
         # 预启动的搜索任务（和 LLM 回复并行）
-        self.pending_search: "asyncio.Task | None" = None
+        self.pending_search: asyncio.Task | None = None
 
     def touch(self):
         """更新最后活跃时间。"""
@@ -64,7 +64,7 @@ _socket_states_lock = threading.Lock()
 _MAX_SOCKET_STATES = 1000  # 硬上限，极端高并发场景下兜底
 
 # Socket 级配置隔离：key = socket sid, value = {provider, model, apiKey, baseUrl, name}
-socket_configs = {}
+socket_configs: dict[str, dict] = {}
 _socket_configs_lock = threading.Lock()
 
 # 全局预编译的图（图本身不区分 socket，Agent 函数通过 sid 获取配置）
@@ -145,8 +145,15 @@ def start_socket_cleanup():
 
 # 常见的 API Key 占位符/默认值，视为无效配置
 _INVALID_API_KEY_PATTERNS = {
-    "", "your_api_key_here", "your-api-key", "your_api_key",
-    "sk-xxxx", "sk-xxxxxxxx", "placeholder", "none", "null",
+    "",
+    "your_api_key_here",
+    "your-api-key",
+    "your_api_key",
+    "sk-xxxx",
+    "sk-xxxxxxxx",
+    "placeholder",
+    "none",
+    "null",
 }
 
 
@@ -182,7 +189,8 @@ def has_valid_config(sid: str = None) -> bool:
         return _is_valid_api_key(cfg.get("apiKey"))
     # 兼容旧版 .env
     try:
-        from core.config import get_api_key, get_provider
+        from core.config import get_api_key
+
         key = get_api_key()
         if _is_valid_api_key(key):
             return True
@@ -221,12 +229,14 @@ def init_agents():
         # 初始化记忆系统(后台 fire-and-forget,sentence-transformers 首次加载~10-15s,
         # 不阻塞 init_agents 返回。第一次 search/save 调用时若未就绪会自动 await initialize)
         if _MEMORY_SYSTEM_AVAILABLE:
+
             def _bg_memory_init():
                 try:
                     asyncio.run(get_memory_store().initialize())
                     logger.info("Memory system initialized")
                 except Exception as e:
                     logger.warning(f"Memory system initialization failed: {e}")
+
             threading.Thread(target=_bg_memory_init, name="memory-warmup", daemon=True).start()
         else:
             logger.info("Memory system not available (dependencies missing)")

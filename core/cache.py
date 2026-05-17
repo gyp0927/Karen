@@ -8,13 +8,11 @@
 """
 
 import hashlib
-import json
 import logging
 import os
 import sqlite3
 import threading
 import time
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +21,12 @@ _DB_PATH = os.path.join(_DB_DIR, "cache.db")
 _lock = threading.RLock()
 
 # 默认 TTL 从 core.config 集中管理
-from core.config import CACHE_DEFAULT_TTL as _DEFAULT_TTL
+from core.config import CACHE_DEFAULT_TTL as _DEFAULT_TTL  # noqa: E402
 
 
 def _get_conn() -> sqlite3.Connection:
     from core.db_utils import get_sqlite_conn
+
     # 线程本地持久连接:避免每次 get/set 都新建 SQLite 连接(每次连接要重做
     # PRAGMA journal_mode=WAL/synchronous=NORMAL,空响应路径压力下成为瓶颈)。
     return get_sqlite_conn(_DB_PATH, use_thread_local=True)
@@ -88,12 +87,28 @@ class ResponseCache:
         return hashlib.blake2b(raw_key.encode("utf-8"), digest_size=32).hexdigest()
 
     # 敏感关键词（跳过缓存，避免敏感信息被缓存）
-    _SKIP_KEYWORDS = frozenset([
-        "密码", "password", "token", "secret", "api_key", "apikey", "api-key",
-        "身份证", "手机号", "信用卡", "cvv",
-        "密钥", "key", "secret_key", "private_key",
-        "access_token", "bearer", "auth",
-    ])
+    _SKIP_KEYWORDS = frozenset(
+        [
+            "密码",
+            "password",
+            "token",
+            "secret",
+            "api_key",
+            "apikey",
+            "api-key",
+            "身份证",
+            "手机号",
+            "信用卡",
+            "cvv",
+            "密钥",
+            "key",
+            "secret_key",
+            "private_key",
+            "access_token",
+            "bearer",
+            "auth",
+        ]
+    )
 
     def _should_skip_cache(self, messages: list) -> bool:
         """判断是否应该跳过缓存。"""
@@ -107,10 +122,27 @@ class ResponseCache:
         return False
 
     # 时效性查询（短 TTL，避免过期信息留存太久）
-    _VOLATILE_KW = frozenset([
-        "天气", "气温", "股价", "新闻", "今天", "现在", "目前", "最新", "实时",
-        "weather", "stock", "news", "today", "yesterday", "latest", "current", "now",
-    ])
+    _VOLATILE_KW = frozenset(
+        [
+            "天气",
+            "气温",
+            "股价",
+            "新闻",
+            "今天",
+            "现在",
+            "目前",
+            "最新",
+            "实时",
+            "weather",
+            "stock",
+            "news",
+            "today",
+            "yesterday",
+            "latest",
+            "current",
+            "now",
+        ]
+    )
     # 时效性按比例缩短（默认 24h → 1h 左右）
     _VOLATILE_TTL_FACTOR = 1 / 24
 
@@ -125,7 +157,7 @@ class ResponseCache:
                 return self._VOLATILE_TTL_FACTOR
         return 1.0
 
-    def get(self, messages: list, provider: str, model: str) -> Optional[str]:
+    def get(self, messages: list, provider: str, model: str) -> str | None:
         """从缓存获取响应。"""
         if not self.enabled:
             return None
@@ -146,21 +178,20 @@ class ResponseCache:
             cursor = conn.execute(
                 """SELECT response, hit_count FROM cache_entries
                    WHERE key_hash = ? AND expires_at > ?""",
-                (key_hash, time.time())
+                (key_hash, time.time()),
             )
             row = cursor.fetchone()
             if row:
                 # 更新命中计数
                 conn.execute(
-                    "UPDATE cache_entries SET hit_count = ? WHERE key_hash = ?",
-                    (row["hit_count"] + 1, key_hash)
+                    "UPDATE cache_entries SET hit_count = ? WHERE key_hash = ?", (row["hit_count"] + 1, key_hash)
                 )
                 conn.commit()
                 logger.debug(f"Cache hit: {key_hash[:16]}... (hits={row['hit_count'] + 1})")
                 return row["response"]
             return None
 
-    def set(self, messages: list, provider: str, model: str, response: str, ttl_seconds: Optional[int] = None):
+    def set(self, messages: list, provider: str, model: str, response: str, ttl_seconds: int | None = None):
         """将响应写入缓存。
 
         ttl_seconds: 显式 TTL（秒），不传则按消息内容自动推断（时效性查询 TTL 更短）。
@@ -175,7 +206,7 @@ class ResponseCache:
         key_hash = self._get_cache_key(messages, provider, model)
         now = time.time()
         if ttl_seconds is not None:
-            effective_ttl = ttl_seconds
+            effective_ttl: float = ttl_seconds
         else:
             effective_ttl = self.ttl * self._detect_ttl_factor(messages)
         expires = now + effective_ttl
@@ -200,7 +231,7 @@ class ResponseCache:
                    created_at=excluded.created_at,
                    expires_at=excluded.expires_at,
                    hit_count=0""",
-                (key_hash, provider, model, preview, response, now, expires)
+                (key_hash, provider, model, preview, response, now, expires),
             )
             conn.commit()
             logger.debug(f"Cache set: {key_hash[:16]}...")
@@ -230,9 +261,7 @@ class ResponseCache:
             expired = conn.execute(
                 "SELECT COUNT(*) FROM cache_entries WHERE expires_at < ?", (time.time(),)
             ).fetchone()[0]
-            total_hits = conn.execute(
-                "SELECT COALESCE(SUM(hit_count), 0) FROM cache_entries"
-            ).fetchone()[0]
+            total_hits = conn.execute("SELECT COALESCE(SUM(hit_count), 0) FROM cache_entries").fetchone()[0]
             db_size = os.path.getsize(_DB_PATH) if os.path.exists(_DB_PATH) else 0
             return {
                 "enabled": self.enabled,
@@ -245,7 +274,7 @@ class ResponseCache:
 
 
 # 全局缓存实例
-_cache_instance: Optional[ResponseCache] = None
+_cache_instance: ResponseCache | None = None
 _cache_singleton_lock = threading.Lock()
 
 
@@ -263,8 +292,5 @@ def configure_cache(enabled: bool = True, ttl_hours: int = 24):
     """配置缓存参数（线程安全）。"""
     global _cache_instance
     with _cache_singleton_lock:
-        _cache_instance = ResponseCache(
-            ttl_seconds=ttl_hours * 3600,
-            enabled=enabled
-        )
+        _cache_instance = ResponseCache(ttl_seconds=ttl_hours * 3600, enabled=enabled)
     logger.info(f"Cache configured: enabled={enabled}, ttl={ttl_hours}h")

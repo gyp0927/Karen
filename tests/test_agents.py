@@ -64,7 +64,7 @@ async def test_cache_stats():
 
 @pytest.mark.asyncio
 async def test_providers():
-    from core.config import list_providers, PROVIDER_CONFIG
+    from core.config import list_providers
 
     providers = list_providers()
     assert "siliconflow" in providers
@@ -82,7 +82,7 @@ async def test_model_name():
 
 @pytest.mark.asyncio
 async def test_memory():
-    from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
+    from core.memory_client import _MEMORY_SYSTEM_AVAILABLE, get_memory_store
 
     if not _MEMORY_SYSTEM_AVAILABLE:
         pytest.skip("记忆系统依赖未安装")
@@ -109,7 +109,7 @@ async def test_memory():
 
 @pytest.mark.asyncio
 async def test_rag():
-    from core.rag import add_document, search_knowledge, get_knowledge_stats
+    from core.rag import add_document, get_knowledge_stats, search_knowledge
 
     chunks = await add_document("Python是一种高级编程语言。", source="test_doc")
     assert chunks >= 0

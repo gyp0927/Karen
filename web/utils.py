@@ -2,6 +2,7 @@
 
 无 Flask/SocketIO 依赖的纯工具函数，可在任何上下文安全使用。
 """
+
 import asyncio
 import concurrent.futures
 import logging

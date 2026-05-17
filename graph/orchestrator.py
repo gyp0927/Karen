@@ -1,10 +1,9 @@
-from typing import TypedDict, Annotated, Sequence, Optional
+from collections.abc import Sequence
 from operator import add
-from langchain_core.messages import BaseMessage
-from langgraph.graph import StateGraph, END
-from langgraph.types import Send
+from typing import Annotated, TypedDict
 
-from cognition.types import ThinkingMode
+from langchain_core.messages import BaseMessage
+from langgraph.graph import END, StateGraph
 
 
 class AgentState(TypedDict):
@@ -14,6 +13,7 @@ class AgentState(TypedDict):
     当前 fast_graph 为单 Responder 节点，搜索在 responder 内部异步并行处理，
     不再通过外部 LangGraph 节点并行写入，因此不存在排序问题。
     """
+
     messages: Annotated[Sequence[BaseMessage], add]
     active_agent: str | None
     task_context: dict | None
@@ -21,7 +21,7 @@ class AgentState(TypedDict):
     base_model_response: str | None
     review_result: str | None
     awaiting_review: bool
-    cognitive_state: Optional[dict]  # 认知状态序列化后的字典
+    cognitive_state: dict | None  # 认知状态序列化后的字典
 
 
 # 辅助函数：从state中提取和保存cognitive_state
@@ -95,5 +95,3 @@ def create_fast_graph(responder_agent):
     workflow.set_entry_point("responder")
     workflow.add_edge("responder", END)
     return workflow.compile()
-
-

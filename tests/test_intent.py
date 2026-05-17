@@ -1,22 +1,26 @@
 """意图分类边界 case 测试"""
 
 import pytest
-from core.intent import classify_intent_sync, IntentType
+
+from core.intent import IntentType, classify_intent_sync
 
 
-@pytest.mark.parametrize("query,expected_intent,skip_search", [
-    ("你好", IntentType.GREETING, True),
-    ("早上好", IntentType.GREETING, True),
-    ("再见", IntentType.FAREWELL, True),
-    ("谢谢", IntentType.THANKS, True),
-    ("3+5等于多少", IntentType.MATH, True),
-    ("写个Python排序函数", IntentType.CODING, True),
-    ("写一首诗", IntentType.CREATIVE, True),
-    ("什么是量子计算", IntentType.FACTUAL, False),
-    ("为什么天空是蓝色的", IntentType.FACTUAL, False),
-    ("最新新闻", IntentType.FACTUAL, False),
-    ("翻译成英文", IntentType.TRANSLATION, True),
-])
+@pytest.mark.parametrize(
+    "query,expected_intent,skip_search",
+    [
+        ("你好", IntentType.GREETING, True),
+        ("早上好", IntentType.GREETING, True),
+        ("再见", IntentType.FAREWELL, True),
+        ("谢谢", IntentType.THANKS, True),
+        ("3+5等于多少", IntentType.MATH, True),
+        ("写个Python排序函数", IntentType.CODING, True),
+        ("写一首诗", IntentType.CREATIVE, True),
+        ("什么是量子计算", IntentType.FACTUAL, False),
+        ("为什么天空是蓝色的", IntentType.FACTUAL, False),
+        ("最新新闻", IntentType.FACTUAL, False),
+        ("翻译成英文", IntentType.TRANSLATION, True),
+    ],
+)
 def test_intent_classification(query, expected_intent, skip_search):
     result = classify_intent_sync(query)
     assert result.intent == expected_intent

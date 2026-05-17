@@ -2,9 +2,9 @@
 
 import logging
 import re
-from typing import Optional
+from typing import cast
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class ConversationSummarizer:
         """判断是否需要摘要。"""
         return message_count >= self.threshold
 
-    def summarize(self, messages: list[BaseMessage], llm=None) -> Optional[str]:
+    def summarize(self, messages: list[BaseMessage], llm=None) -> str | None:
         """生成对话摘要。
 
         Args:
@@ -52,22 +52,22 @@ class ConversationSummarizer:
             content = msg.content[:500]  # 每条消息最多取 500 字符
             conversation_text.append(f"{sender}: {content}")
 
-        summary_prompt = f"""请对以下对话进行摘要，保留关键信息：
-
-要求：
-1. 总结用户的主要需求和问题
-2. 记录 AI 提供的关键回答和事实
-3. 保留任何待办事项或待确认的事项
-4. 保留用户明确表达的偏好
-5. 摘要控制在 300 字以内
-
-对话内容：
-{"\n".join(conversation_text)}
-
-请输出摘要："""
+        conversation_block = "\n".join(conversation_text)
+        summary_prompt = (
+            "请对以下对话进行摘要，保留关键信息：\n\n"
+            "要求：\n"
+            "1. 总结用户的主要需求和问题\n"
+            "2. 记录 AI 提供的关键回答和事实\n"
+            "3. 保留任何待办事项或待确认的事项\n"
+            "4. 保留用户明确表达的偏好\n"
+            "5. 摘要控制在 300 字以内\n\n"
+            f"对话内容：\n{conversation_block}\n\n"
+            "请输出摘要："
+        )
 
         try:
             from langchain_core.messages import SystemMessage
+
             response = llm.invoke([SystemMessage(content=summary_prompt)])
             summary = response.content.strip()
             logger.info(f"Generated LLM summary, length={len(summary)}")
@@ -82,7 +82,7 @@ class ConversationSummarizer:
         key_facts = []
 
         for msg in messages:
-            content = msg.content[:200]
+            content = cast(str, msg.content)[:200]
             if isinstance(msg, HumanMessage):
                 # 提取用户问题（取前 50 字符作为主题）
                 topic = content[:50].strip().replace("\n", " ")
@@ -90,7 +90,9 @@ class ConversationSummarizer:
                     topics.append(topic)
             elif isinstance(msg, AIMessage):
                 # 尝试提取关键事实（包含数字、日期的句子）
-                facts = re.findall(r'[^。！?.]+(?:\d{4}|\d+%|第[一二三四五]|首先|关键|重要)[^。！?.]*[。！?.]?', content)
+                facts = re.findall(
+                    r"[^。！?.]+(?:\d{4}|\d+%|第[一二三四五]|首先|关键|重要)[^。！?.]*[。！?.]?", content
+                )
                 key_facts.extend(facts[:2])  # 每条 AI 消息最多取 2 个事实
 
         lines = ["[对话摘要]"]

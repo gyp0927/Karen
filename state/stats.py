@@ -1,13 +1,11 @@
 """API 调用统计 - 记录每次 LLM 调用的 token、耗时和费用。"""
 
-import json
 import logging
 import os
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass, asdict
-from typing import Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +14,7 @@ _DB_PATH = os.path.join(_DB_DIR, "stats.db")
 _lock = threading.RLock()
 
 # 各提供商大致价格（每 1K tokens，USD）- 用于估算
-_PRICE_PER_1K = {
+_PRICE_PER_1K: dict[str, dict[str, float]] = {
     "openai": {"input": 0.005, "output": 0.015},      # gpt-4o
     "anthropic": {"input": 0.003, "output": 0.015},   # claude-sonnet
     "deepseek": {"input": 0.0015, "output": 0.006},
@@ -96,7 +94,7 @@ def record_call(record: CallRecord):
 
 def estimate_cost(provider: str, prompt_tokens: int, completion_tokens: int) -> float:
     """估算调用费用（USD）"""
-    prices = _PRICE_PER_1K.get(provider, _PRICE_PER_1K["default"])
+    prices: dict[str, float] = _PRICE_PER_1K.get(provider, _PRICE_PER_1K["default"])
     input_cost = (prompt_tokens / 1000) * prices["input"]
     output_cost = (completion_tokens / 1000) * prices["output"]
     return round(input_cost + output_cost, 6)

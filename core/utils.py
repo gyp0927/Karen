@@ -1,7 +1,7 @@
 """通用工具函数"""
+
 import re
 import threading
-from typing import Callable
 
 # 预编译 detect_language 中使用的正则，避免每次调用重复编译
 _DETECT_LANG_CLEAN_RE = re.compile(r"[\s\.\,\!\?\;\:\'\"\(\)\[\]\{\}\\/\-\_\@\#\$\%\&\*\+\=\|\<\>\`\~]")

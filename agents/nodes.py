@@ -1,32 +1,31 @@
 """Agent 节点函数 - Coordinator、Researcher、Responder、Reviewer、Planner。"""
 
+import asyncio
 import json
 import logging
 import re
 import time
-import asyncio
-import threading
 import unicodedata
 import weakref
+from collections.abc import Callable
 from dataclasses import asdict
-from typing import Optional, Callable
+from typing import Any, cast
 
-from langchain_core.messages import SystemMessage, AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
-from core.cache import get_cache
-from core.plugin_system import get_plugins_prompt
-from agents.prompts import COORDINATOR_PROMPT, get_reviewer_prompt, build_responder_prompt, PLANNER_PROMPT
-from agents.llm import get_llm, get_streaming_callback, get_llm_provider_model
+from agents.llm import get_llm, get_llm_provider_model, get_streaming_callback
+from agents.prompts import COORDINATOR_PROMPT, PLANNER_PROMPT, build_responder_prompt, get_reviewer_prompt
 from agents.search import run_parallel_search
 from agents.tools import _need_tool_call
-from state.stop_flag import is_stopped
-from state.stats import record_call, estimate_cost, CallRecord
-
 from cognition.human_mind import HumanMind
+from cognition.tool_engine import run_tool_loop
 from cognition.types import CognitiveState
 from cognition.utils import get_cognitive_state_from_dict, save_cognitive_state_to_dict
-from cognition.tool_engine import run_tool_loop
+from core.cache import get_cache
+from core.plugin_system import get_plugins_prompt
+from state.stats import CallRecord, estimate_cost, record_call
+from state.stop_flag import is_stopped
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +106,7 @@ def _quick_greeting(text: str) -> str | None:
     # 避免把"你好我想问个问题"误判成"你好"
     for key in _GREETINGS_BY_LEN:
         if t.startswith(key):
-            tail = t[len(key):].strip(_GREETING_FILLERS).strip()
+            tail = t[len(key) :].strip(_GREETING_FILLERS).strip()
             if not tail:
                 return _GREETING_PATTERNS[key]
     return None
@@ -116,16 +115,14 @@ def _quick_greeting(text: str) -> str | None:
 _REPLAY_CHUNK_SIZE = 50
 
 
-def _replay_stream(stream_cb: Optional[Callable[[str], None]], text: str, sid: str = "") -> None:
+def _replay_stream(stream_cb: Callable[[str], None] | None, text: str, sid: str = "") -> None:
     """把缓存/模板回复按 chunk 喂给前端回调,模拟 LLM 流式效果。"""
     if not stream_cb or not text:
         return
     for i in range(0, len(text), _REPLAY_CHUNK_SIZE):
         if sid and is_stopped(sid):
             break
-        stream_cb(text[i:i + _REPLAY_CHUNK_SIZE])
-
-
+        stream_cb(text[i : i + _REPLAY_CHUNK_SIZE])
 
 
 def _estimate_tokens(text: str) -> int:
@@ -133,7 +130,7 @@ def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
     # 覆盖 CJK 统一表意文字基本区 + 扩展 A-G 区（通过 unicodedata.category）
-    chinese_chars = sum(1 for c in text if unicodedata.category(c) == 'Lo')
+    chinese_chars = sum(1 for c in text if unicodedata.category(c) == "Lo")
     non_chinese = len(text) - chinese_chars
     return max(1, chinese_chars + non_chinese // 4)
 
@@ -189,19 +186,21 @@ def _record_llm_call(
         completion_tokens = _estimate_tokens(response)
         total = prompt_tokens + completion_tokens
         cost = estimate_cost(provider, prompt_tokens, completion_tokens)
-        record_call(CallRecord(
-            timestamp=time.time(),
-            provider=provider,
-            model=model,
-            agent_name=agent_name,
-            session_id=sid or "",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total,
-            duration_ms=duration_ms,
-            estimated_cost_usd=cost,
-            status=status,
-        ))
+        record_call(
+            CallRecord(
+                timestamp=time.time(),
+                provider=provider,
+                model=model,
+                agent_name=agent_name,
+                session_id=sid or "",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total,
+                duration_ms=duration_ms,
+                estimated_cost_usd=cost,
+                status=status,
+            )
+        )
     except Exception as e:
         logger.debug(f"stats record failed: {e}")
 
@@ -212,13 +211,15 @@ def _build_result_dict(
     cognitive_state: CognitiveState | None = None,
 ) -> dict:
     """构建标准返回字典，自动包含认知状态（如果提供）。"""
-    result = {"messages": [AIMessage(content=response, name=agent_name)]}
+    result: dict[str, Any] = {"messages": [AIMessage(content=response, name=agent_name)]}
     if cognitive_state is not None:
         result["cognitive_state"] = asdict(cognitive_state)
     return result
 
 
-def _check_greeting_cache(query: str, agent_name: str, tools: Optional[list[BaseTool]], sid: str | None, on_token: Optional[Callable[[str], None]]) -> dict | None:
+def _check_greeting_cache(
+    query: str, agent_name: str, tools: list[BaseTool] | None, sid: str | None, on_token: Callable[[str], None] | None
+) -> dict | None:
     """检查问候语快速路径。命中时返回 result_dict，否则返回 None。"""
     if agent_name != "responder" or tools:
         return None
@@ -250,7 +251,14 @@ def _build_cache_messages(messages: list, system_prompt: str, agent_name: str) -
     return cache_messages
 
 
-def _try_read_cache(cache, cache_messages: list, cache_key: tuple, agent_name: str, sid: str | None, on_token: Optional[Callable[[str], None]]) -> dict | None:
+def _try_read_cache(
+    cache,
+    cache_messages: list,
+    cache_key: tuple,
+    agent_name: str,
+    sid: str | None,
+    on_token: Callable[[str], None] | None,
+) -> dict | None:
     """尝试从缓存读取。命中时返回 result_dict，否则返回 None。"""
     if not cache:
         return None
@@ -281,7 +289,9 @@ def _bind_llm_params(llm, agent_name: str, provider: str):
     return llm
 
 
-async def _invoke_llm_stream(llm, messages: list, stream_cb: Optional[Callable[[str], None]], sid: str | None, agent_name: str) -> str:
+async def _invoke_llm_stream(
+    llm, messages: list, stream_cb: Callable[[str], None] | None, sid: str | None, agent_name: str
+) -> str:
     """执行流式 LLM 调用，返回响应文本。处理超时和连接中断。"""
     response_parts: list[str] = []
 
@@ -296,15 +306,19 @@ async def _invoke_llm_stream(llm, messages: list, stream_cb: Optional[Callable[[
 
     try:
         await asyncio.wait_for(_stream(), timeout=_LLM_STREAM_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         response = "".join(response_parts)
-        logger.warning(f"[{agent_name}] LLM streaming timed out after {_LLM_STREAM_TIMEOUT}s, returning partial response ({len(response)} chars)")
+        logger.warning(
+            f"[{agent_name}] LLM streaming timed out after {_LLM_STREAM_TIMEOUT}s, returning partial response ({len(response)} chars)"
+        )
     except Exception as e:
         error_name = type(e).__name__
         error_msg = str(e)
-        if (error_name == "RemoteProtocolError"
-                or "peer closed connection" in error_msg
-                or "incomplete chunked read" in error_msg):
+        if (
+            error_name == "RemoteProtocolError"
+            or "peer closed connection" in error_msg
+            or "incomplete chunked read" in error_msg
+        ):
             if is_stopped(sid):
                 logger.info(f"[{agent_name}] Streaming interrupted but stop requested, returning partial response")
             else:
@@ -315,7 +329,7 @@ async def _invoke_llm_stream(llm, messages: list, stream_cb: Optional[Callable[[
                 else:
                     try:
                         await asyncio.wait_for(_stream(), timeout=_LLM_STREAM_TIMEOUT)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         logger.warning(f"[{agent_name}] LLM retry timed out after {_LLM_STREAM_TIMEOUT}s")
         else:
             raise
@@ -326,12 +340,15 @@ def _write_cache_async(cache, cache_messages: list, cache_key: tuple, response: 
     """后台异步写入缓存（fire-and-forget）。"""
     if not cache or not response or is_stopped(sid):
         return
+
     def _cache_write():
         try:
             cache.set(cache_messages, cache_key[0], cache_key[1], response)
         except (OSError, ValueError) as e:
             logger.warning(f"Cache write failed: {e}")
+
     from core.utils import spawn_bg
+
     spawn_bg(_cache_write)
 
 
@@ -346,11 +363,11 @@ async def _run_agent(
     state: dict,
     system_prompt: str,
     agent_name: str,
-    sid: Optional[str] = None,
-    on_token: Optional[Callable[[str], None]] = None,
+    sid: str | None = None,
+    on_token: Callable[[str], None] | None = None,
     enable_cognition: bool = True,
     enable_monologue: bool = True,
-    tools: Optional[list[BaseTool]] = None,
+    tools: list[BaseTool] | None = None,
 ) -> dict:
     """通用 Agent 执行函数（接入认知系统 + 工具调用）。"""
     if sid is None:
@@ -358,13 +375,17 @@ async def _run_agent(
 
     cognitive_state = get_cognitive_state_from_dict(state)
     is_responder = agent_name == "responder"
-    mind = HumanMind(
-        enable_monologue=enable_monologue and is_responder,
-        enable_emotion=is_responder,
-        enable_intuition=enable_cognition,
-        enable_metacognition=is_responder and enable_cognition,
-        enable_persona=is_responder,
-    ) if enable_cognition else None
+    mind = (
+        HumanMind(
+            enable_monologue=enable_monologue and is_responder,
+            enable_emotion=is_responder,
+            enable_intuition=enable_cognition,
+            enable_metacognition=is_responder and enable_cognition,
+            enable_persona=is_responder,
+        )
+        if enable_cognition
+        else None
+    )
     messages = state.get("messages", [])
     query = messages[-1].content if messages else ""
 
@@ -378,7 +399,11 @@ async def _run_agent(
     had_monologue = False
     if mind and enable_cognition:
         enhanced_prompt, had_monologue = mind.enhance_prompt(
-            agent_name, system_prompt, query, cognitive_state, sid=sid or "",
+            agent_name,
+            system_prompt,
+            query,
+            cognitive_state,
+            sid=sid or "",
         )
 
     # ---- Phase 3: 构建消息列表 ----
@@ -386,6 +411,7 @@ async def _run_agent(
     date_msg = None
     if is_responder:
         from datetime import datetime
+
         date_msg = SystemMessage(
             content=f"今天是{datetime.now().strftime('%Y年%m月%d日')}。",
             name="current_date",
@@ -419,15 +445,25 @@ async def _run_agent(
         try:
             if tools:
                 stream_cb = on_token if on_token else get_streaming_callback(sid)
-                response = await run_tool_loop(llm, messages, tools, max_iterations=3, sid=sid or "", on_token=stream_cb)
+                response = await run_tool_loop(
+                    llm, messages, tools, max_iterations=3, sid=sid or "", on_token=stream_cb
+                )
             else:
-                stream_cb = on_token if on_token else (get_streaming_callback(sid) if agent_name == "responder" else None)
+                stream_cb = (
+                    on_token if on_token else (get_streaming_callback(sid) if agent_name == "responder" else None)
+                )
                 response = await _invoke_llm_stream(llm, messages, stream_cb, sid, agent_name)
         except Exception:
             from core.utils import spawn_bg
+
             spawn_bg(
-                _record_llm_call, agent_name, sid, messages, "",
-                int((time.time() - _llm_t0) * 1000), "error",
+                _record_llm_call,
+                agent_name,
+                sid,
+                messages,
+                "",
+                int((time.time() - _llm_t0) * 1000),
+                "error",
             )
             raise
 
@@ -435,8 +471,15 @@ async def _run_agent(
     _llm_duration_ms = int((time.time() - _llm_t0) * 1000)
     _llm_status = "stopped" if is_stopped(sid) else "success"
     from core.utils import spawn_bg
+
     spawn_bg(
-        _record_llm_call, agent_name, sid, messages, response, _llm_duration_ms, _llm_status,
+        _record_llm_call,
+        agent_name,
+        sid,
+        messages,
+        response,
+        _llm_duration_ms,
+        _llm_status,
     )
 
     # ---- Phase 8: 缓存写入 ----
@@ -445,7 +488,12 @@ async def _run_agent(
     # ---- Phase 9: 认知处理 ----
     if mind and enable_cognition:
         response = mind.process_response(
-            agent_name, query, response, cognitive_state, had_monologue, sid=sid or "",
+            agent_name,
+            query,
+            response,
+            cognitive_state,
+            had_monologue,
+            sid=sid or "",
         )
         save_cognitive_state_to_dict(state, cognitive_state)
 
@@ -469,10 +517,14 @@ async def researcher_node(state: dict, sid: str | None = None) -> dict:
     """
     search_context = await run_parallel_search(state)
     if search_context:
-        return {"messages": [SystemMessage(
-            content=f"【搜索结果】\n\n{search_context}\n\n请基于以上搜索结果生成最终回答。",
-            name="researcher",
-        )]}
+        return {
+            "messages": [
+                SystemMessage(
+                    content=f"【搜索结果】\n\n{search_context}\n\n请基于以上搜索结果生成最终回答。",
+                    name="researcher",
+                )
+            ]
+        }
     return {"messages": []}
 
 
@@ -484,18 +536,21 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
     """
     plugin_prompt = get_plugins_prompt()
     from core.i18n import LANG_INSTRUCTIONS
+
     detected_lang = state.get("task_context", {}).get("detected_language", "zh")
     lang_instr = LANG_INSTRUCTIONS.get(detected_lang, "")
     responder_prompt = build_responder_prompt(plugin_prompt, lang_instr)
 
     # ---- 意图判断：每次都重新分类，避免跨轮次缓存导致错误意图复用 ----
     from langchain_core.messages import HumanMessage
+
     from core.intent import classify_intent_sync
+
     # 协调模式下 state["messages"][-1] 可能是 AIMessage，需向前找到最后一个 HumanMessage
     query = ""
     for msg in reversed(state.get("messages", [])):
         if isinstance(msg, HumanMessage):
-            query = msg.content
+            query = cast(str, msg.content)
             break
     history = state.get("messages", [])
     result = classify_intent_sync(query, history=history)
@@ -529,6 +584,7 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
         if sid:
             try:
                 from web.state import socket_states
+
                 s = socket_states.get(sid)
                 if s and getattr(s, "pending_search", None) is not None:
                     pre_task = s.pending_search
@@ -542,7 +598,7 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
                 search_context = await asyncio.wait_for(pre_task, timeout=0.5)
                 if search_context:
                     logger.info(f"[responder] Pre-started search returned in time for sid={sid}")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.info(f"[responder] Pre-started search not ready for sid={sid}, proceeding")
             except Exception as e:
                 logger.warning(f"[responder] Pre-started search failed: {e}")
@@ -553,7 +609,7 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
                     run_parallel_search(state),
                     timeout=1.5,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.info("[responder] Search timeout (1.5s), proceeding with knowledge")
             except Exception as e:
                 logger.warning(f"[responder] Search failed: {e}")
@@ -575,12 +631,16 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
     tools = None
     if _need_tool_call(original_query):
         from cognition.tool_engine import execute_python
+
         tools = [execute_python]
 
     # Fast mode：简单查询完全禁用 cognition 开销；复杂查询启用 persona+emotion+intuition+metacognition
     use_cognition = not is_simple
     return await _run_agent(
-        state, responder_prompt, "responder", sid,
+        state,
+        responder_prompt,
+        "responder",
+        sid,
         enable_cognition=use_cognition,
         enable_monologue=False,
         tools=tools,
@@ -621,6 +681,7 @@ def parse_plan_from_response(text: str) -> dict | None:
 
 def create_agents(language: str = "zh", fast_mode: bool = False):
     """创建所有 Agent 节点函数的便捷函数。"""
+
     async def _reviewer_node(state: dict, sid: str | None = None) -> dict:
         return await reviewer_node(state, language=language, sid=sid)
 

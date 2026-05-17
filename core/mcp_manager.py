@@ -8,14 +8,10 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "state", "mcp_servers.json"
-)
+_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state", "mcp_servers.json")
 
 # 通过环境变量限制 stdio MCP 可启动的命令(防 add_server 任意命令注入)
 # 默认拒绝所有命令，必须显式配置白名单才允许启动 MCP 服务器
@@ -32,10 +28,23 @@ else:
 # 透传给 MCP 子进程的最小环境变量集合 — 不含项目 API Key
 # 防止恶意/失误的 MCP 拿到所有凭据
 _MCP_ENV_PASSTHROUGH = {
-    "PATH", "LANG", "LC_ALL", "LC_CTYPE",
-    "USERPROFILE", "USERNAME", "HOMEPATH", "HOMEDRIVE",  # Windows
-    "HOME", "USER", "TMPDIR", "TEMP", "TMP",
-    "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",  # Windows 必需
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "USERPROFILE",
+    "USERNAME",
+    "HOMEPATH",
+    "HOMEDRIVE",  # Windows
+    "HOME",
+    "USER",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",  # Windows 必需
 }
 
 
@@ -56,7 +65,7 @@ def _load_config() -> dict:
     if not os.path.exists(_CONFIG_PATH):
         return {}
     try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -96,18 +105,21 @@ class MCPManager:
         """列出所有服务器配置"""
         result = []
         for name, cfg in self._servers.items():
-            result.append({
-                "name": name,
-                "transport": cfg.get("transport", "stdio"),
-                "command": cfg.get("command", ""),
-                "args": cfg.get("args", []),
-                "url": cfg.get("url", ""),
-                "enabled": cfg.get("enabled", True),
-            })
+            result.append(
+                {
+                    "name": name,
+                    "transport": cfg.get("transport", "stdio"),
+                    "command": cfg.get("command", ""),
+                    "args": cfg.get("args", []),
+                    "url": cfg.get("url", ""),
+                    "enabled": cfg.get("enabled", True),
+                }
+            )
         return result
 
-    def add_server(self, name: str, command: str = "", args: list = None,
-                   env: dict = None, url: str = "", transport: str = "stdio") -> bool:
+    def add_server(
+        self, name: str, command: str = "", args: list = None, env: dict = None, url: str = "", transport: str = "stdio"
+    ) -> bool:
         """添加/更新服务器配置"""
         # 命令白名单校验:防止远程攻击者(在 LOCAL_ONLY 误绕过等场景下)注入任意 shell 命令
         # 白名单为空时拒绝所有命令（默认安全策略）
@@ -140,23 +152,16 @@ class MCPManager:
                 and cmd_path not in allowed_paths
                 and cmd_real not in allowed_paths
             ):
-                raise ValueError(
-                    f"命令 '{command}' 不在 MCP_ALLOWED_COMMANDS 白名单中"
-                )
+                raise ValueError(f"命令 '{command}' 不在 MCP_ALLOWED_COMMANDS 白名单中")
             # 额外检查:阻止通过参数执行任意代码
             _args = args or []
             dangerous_flags = {"-c", "--command", "-e", "--eval", "-m", "--module", "-", "--run"}
             for i, arg in enumerate(_args):
                 if arg in dangerous_flags and i + 1 < len(_args):
-                    raise ValueError(
-                        f"命令 '{command}' 包含危险参数 '{arg}'，"
-                        "可能用于执行任意代码，已被阻止"
-                    )
+                    raise ValueError(f"命令 '{command}' 包含危险参数 '{arg}'，可能用于执行任意代码，已被阻止")
             # 阻止参数中包含内联脚本（如 python 的 -c 'print(1)'）
             if any(";" in a or "|" in a or "$(" in a for a in _args):
-                raise ValueError(
-                    f"命令 '{command}' 的参数包含可疑字符（分号、管道等），已被阻止"
-                )
+                raise ValueError(f"命令 '{command}' 的参数包含可疑字符（分号、管道等），已被阻止")
         self._servers[name] = {
             "transport": transport,
             "command": command,
@@ -199,13 +204,15 @@ class MCPManager:
             try:
                 tools = self.list_tools(name)
                 for t in tools:
-                    all_tools.append({
-                        "name": f"{name}__{t['name']}",
-                        "original_name": t["name"],
-                        "server": name,
-                        "description": t.get("description", ""),
-                        "schema": t.get("inputSchema", {}),
-                    })
+                    all_tools.append(
+                        {
+                            "name": f"{name}__{t['name']}",
+                            "original_name": t["name"],
+                            "server": name,
+                            "description": t.get("description", ""),
+                            "schema": t.get("inputSchema", {}),
+                        }
+                    )
             except Exception as e:
                 logger.warning(f"Failed to list tools from MCP server '{name}': {e}")
         return all_tools
@@ -235,8 +242,8 @@ class MCPManager:
             raise ValueError(f"MCP server '{server_name}' not found")
 
         from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
         from mcp.client.sse import sse_client
+        from mcp.client.stdio import stdio_client
 
         transport = cfg.get("transport", "stdio")
 
@@ -273,8 +280,8 @@ class MCPManager:
             raise ValueError(f"MCP server '{server_name}' not found")
 
         from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
         from mcp.client.sse import sse_client
+        from mcp.client.stdio import stdio_client
 
         transport = cfg.get("transport", "stdio")
 

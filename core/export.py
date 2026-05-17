@@ -3,10 +3,10 @@
 import json
 import logging
 import os
-import tempfile
 from datetime import datetime
+from typing import Any, cast
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def export_markdown(messages: list[BaseMessage], title: str = "聊天记录") ->
         role = "用户" if isinstance(msg, HumanMessage) else "AI"
         sender = getattr(msg, "name", role)
         lines.append(f"\n## {sender}\n")
-        lines.append(msg.content)
+        lines.append(cast(str, msg.content))
         lines.append("\n")
 
     return "\n".join(lines)
@@ -29,19 +29,21 @@ def export_markdown(messages: list[BaseMessage], title: str = "聊天记录") ->
 
 def export_json(messages: list[BaseMessage], title: str = "聊天记录") -> str:
     """导出为 JSON 格式"""
-    data = {
+    data: dict[str, Any] = {
         "title": title,
         "exported_at": datetime.now().isoformat(),
         "message_count": len(messages),
         "messages": [],
     }
     for msg in messages:
-        data["messages"].append({
-            "role": "user" if isinstance(msg, HumanMessage) else "assistant",
-            "sender": getattr(msg, "name", ""),
-            "content": msg.content,
-            "timestamp": datetime.now().isoformat(),
-        })
+        data["messages"].append(
+            {
+                "role": "user" if isinstance(msg, HumanMessage) else "assistant",
+                "sender": getattr(msg, "name", ""),
+                "content": msg.content,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
     return json.dumps(data, ensure_ascii=False, indent=2)
 
 
@@ -72,10 +74,16 @@ def export_html(messages: list[BaseMessage], title: str = "聊天记录") -> str
     ]
 
     # HTML 转义表：用 str.translate 替代链式 replace，减少中间字符串创建
-    _HTML_ESCAPE_TRANS = str.maketrans({
-        "&": "&amp;", "<": "&lt;", ">": "&gt;",
-        '"': "&quot;", "'": "&#x27;", "\n": "<br>",
-    })
+    _HTML_ESCAPE_TRANS = str.maketrans(
+        {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#x27;",
+            "\n": "<br>",
+        }
+    )
 
     for msg in messages:
         if isinstance(msg, HumanMessage):
@@ -88,7 +96,7 @@ def export_html(messages: list[BaseMessage], title: str = "聊天记录") -> str
             css_class = "assistant"
             sender = getattr(msg, "name", "AI") or "AI"
 
-        content = msg.content.translate(_HTML_ESCAPE_TRANS)
+        content = cast(str, msg.content).translate(_HTML_ESCAPE_TRANS)
 
         lines.append(f'  <div class="message {css_class}">')
         lines.append(f'    <div class="sender">{sender}</div>')
@@ -110,9 +118,11 @@ def export_pdf(messages: list[BaseMessage], title: str = "聊天记录") -> tupl
 
     # 尝试使用 weasyprint
     try:
-        from weasyprint import HTML
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
+
+        from weasyprint import HTML
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as f:
             f.write(html_content)
             html_path = f.name
         pdf_bytes = HTML(filename=html_path).write_pdf()

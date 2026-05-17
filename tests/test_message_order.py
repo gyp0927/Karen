@@ -1,7 +1,6 @@
 """消息归一化测试"""
 
-import pytest
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 
 def test_reorder_system_first():

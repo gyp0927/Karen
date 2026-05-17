@@ -1,23 +1,23 @@
 import logging
-from dataclasses import asdict
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langgraph.graph.state import CompiledStateGraph
+from typing import cast
 
-from graph.orchestrator import create_coordination_graph, create_fast_graph
-from state.manager import SessionManager
-from core.model_router import get_router
-from core.utils import detect_language
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
 from agents.llm import set_current_llm_config
-
-# 认知系统导入
-from cognition.human_mind import HumanMind
-from cognition.types import CognitiveState, ThinkingMode
-from cognition.utils import serialize_cognitive_state, get_cognitive_state_from_dict
+from agents.nodes import responder_node
 
 # Fast graph 只需要 responder_node（搜索/工具在节点内部异步处理）
 # Coordination graph 仍需要 tool_caller_node
 from agents.tools import tool_caller_node
-from agents.nodes import responder_node
+
+# 认知系统导入
+from cognition.human_mind import HumanMind
+from cognition.types import CognitiveState
+from cognition.utils import get_cognitive_state_from_dict, serialize_cognitive_state
+from core.model_router import get_router
+from core.utils import detect_language
+from graph.orchestrator import create_coordination_graph, create_fast_graph
+from state.manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ class HumanInterface:
         for msg in result["messages"]:
             if isinstance(msg, AIMessage):
                 agent_name = getattr(msg, "name", None) or "assistant"
-                self.messages.add_agent_message(msg.content, agent_name)
+                self.messages.add_agent_message(cast(str, msg.content), agent_name)
 
         # 获取最后一条 AIMessage 作为响应。
         # 不能直接取 messages[-1]:若所有节点返回 {"messages": []},
@@ -135,7 +135,7 @@ class HumanInterface:
         response = None
         for msg in reversed(result["messages"]):
             if isinstance(msg, AIMessage):
-                response = msg.content
+                response = cast(str, msg.content)
                 break
         if not response:
             logger.warning("No AIMessage in graph result; returning fallback response.")
@@ -174,7 +174,7 @@ class HumanInterface:
         msgs = result.get("messages", [])
         for msg in reversed(msgs):
             if isinstance(msg, AIMessage):
-                return msg.content
+                return cast(str, msg.content)
         return "No review available"
 
     def get_history(self) -> list[BaseMessage]:

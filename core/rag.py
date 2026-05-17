@@ -6,14 +6,13 @@
 
 import json
 import logging
-import os
 import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # 尝试导入 numpy
-from core.vector_store import HAS_NUMPY, get_vector_store
+from core.vector_store import HAS_NUMPY, get_vector_store  # noqa: E402
 
 if HAS_NUMPY:
     import numpy as np
@@ -56,9 +55,11 @@ async def get_embedding(text: str, model: str = "text-embedding-3-small") -> Any
         return None
 
     try:
-        import requests
         import asyncio
-        from core.config import get_api_key, get_base_url, get_provider
+
+        import requests
+
+        from core.config import get_api_key, get_base_url
 
         base_url = get_base_url()
         api_key = get_api_key()
@@ -204,7 +205,8 @@ async def search_knowledge(query: str, top_k: int = 3) -> str:
 def get_knowledge_stats() -> dict[str, Any]:
     """获取知识库统计信息"""
     store = _get_store()
-    from core.vector_store import list_backends, _get_backend_from_config
+    from core.vector_store import _get_backend_from_config, list_backends
+
     return {
         "total_chunks": store.count(),
         "enabled": HAS_NUMPY,

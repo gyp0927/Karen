@@ -1,12 +1,10 @@
 """SQLite 持久化层 - 存储会话和消息历史。"""
 
-import json
 import logging
 import os
 import sqlite3
 import threading
 import time
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

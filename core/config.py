@@ -5,7 +5,6 @@
 """
 
 import os
-from typing import Any
 
 from dotenv import load_dotenv
 
@@ -18,6 +17,7 @@ load_dotenv(_ENV_PATH, override=True)
 def _get_active_config() -> dict | None:
     """获取当前活跃配置（从 model_config_manager）。"""
     from state.model_config_manager import get_active_config
+
     return get_active_config()
 
 
@@ -99,7 +99,10 @@ PROVIDER_CONFIG = {
     "baichuan": {"base_url": "https://api.baichuan-ai.com/v1", "default_model": "baichuan4"},
     "openai": {"base_url": "https://api.openai.com/v1", "default_model": "gpt-4o-mini"},
     "anthropic": {"base_url": "https://api.anthropic.com/v1", "default_model": "claude-sonnet-4-20250514"},
-    "gemini": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "default_model": "gemini-2.0-flash"},
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "default_model": "gemini-2.0-flash",
+    },
     "grok": {"base_url": "https://api.x.ai/v1", "default_model": "grok-3"},
     "mistral": {"base_url": "https://api.mistral.ai/v1", "default_model": "mistral-large-latest"},
     "cohere": {"base_url": "https://api.cohere.com/compatibility/v1", "default_model": "command-r-plus"},

@@ -6,8 +6,8 @@ from langchain_core.messages import HumanMessage
 
 @pytest.mark.asyncio
 async def test_fast_graph():
-    from graph.orchestrator import create_fast_graph
     from agents.nodes import responder_node
+    from graph.orchestrator import create_fast_graph
 
     graph = create_fast_graph(responder_node)
     assert graph is not None
@@ -15,20 +15,18 @@ async def test_fast_graph():
 
 @pytest.mark.asyncio
 async def test_coordination_graph():
-    from graph.orchestrator import create_coordination_graph
     from agents.nodes import coordinator_node, researcher_node, responder_node
     from agents.tools import tool_caller_node
+    from graph.orchestrator import create_coordination_graph
 
-    graph = create_coordination_graph(
-        coordinator_node, researcher_node, tool_caller_node, responder_node
-    )
+    graph = create_coordination_graph(coordinator_node, researcher_node, tool_caller_node, responder_node)
     assert graph is not None
 
 
 @pytest.mark.asyncio
 async def test_chat_fast():
-    from graph.orchestrator import create_fast_graph
     from agents.nodes import responder_node
+    from graph.orchestrator import create_fast_graph
 
     graph = create_fast_graph(responder_node)
     initial_state = {

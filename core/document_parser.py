@@ -1,6 +1,4 @@
 import os
-import io
-from typing import Optional
 
 
 def parse_document(file_path: str) -> str:
@@ -45,6 +43,7 @@ def _parse_docx(file_path: str) -> str:
     """解析 Word"""
     try:
         import docx
+
         doc = docx.Document(file_path)
         paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
         return "\n".join(paragraphs)
@@ -57,7 +56,7 @@ def _parse_text(file_path: str) -> str:
     encodings = ["utf-8", "gbk", "gb2312", "latin-1"]
     for encoding in encodings:
         try:
-            with open(file_path, "r", encoding=encoding) as f:
+            with open(file_path, encoding=encoding) as f:
                 return f.read()
         except UnicodeDecodeError:
             continue

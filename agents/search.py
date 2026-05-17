@@ -2,14 +2,15 @@
 
 import asyncio
 import logging
-from typing import Callable
+from collections.abc import Callable
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
 # 子 Agent 的搜索超时（秒）。比单源搜索的内部超时大,留出 fallback 时间。
 # 协调模式下 Coordinator 先耗 ~1-2s,叠加网页抓取(每页 8s),需留足余量。
 WEB_SEARCH_TIMEOUT_S = 25.0
-WEB_SEARCH_TIMEOUT_FAST_S = 3.0    # 快速模式： aggressively 短
+WEB_SEARCH_TIMEOUT_FAST_S = 3.0  # 快速模式： aggressively 短
 # 记忆系统首次初始化需加载 embedding 模型(~10-20s),3s 必然超时。
 MEMORY_SEARCH_TIMEOUT_S = 15.0
 MEMORY_SEARCH_TIMEOUT_FAST_S = 3.0  # 快速模式：未初始化就快速跳过
@@ -39,7 +40,7 @@ async def _safe_search(
             return f"[{label}]\n\n{result}"
         else:
             logger.debug(f"{label}: 空结果")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         if fast_mode and timeout:
             logger.info(f"{label} 快速模式超时跳过（{timeout}s）")
         else:
@@ -70,7 +71,7 @@ async def web_searcher_agent(query: str, user_id: str = "", session_id: str = ""
     from tools.search import search_and_summarize
 
     def _check(result: str) -> bool:
-        return result and "未找到" not in result
+        return bool(result and "未找到" not in result)
 
     async def _search_with_timeout(q: str) -> str:
         timeout = WEB_SEARCH_TIMEOUT_FAST_S if fast_mode else WEB_SEARCH_TIMEOUT_S
@@ -80,8 +81,11 @@ async def web_searcher_agent(query: str, user_id: str = "", session_id: str = ""
         )
 
     return await _safe_search(
-        _search_with_timeout, "联网搜索结果", query,
-        success_check=_check, fast_mode=fast_mode,
+        _search_with_timeout,
+        "联网搜索结果",
+        query,
+        success_check=_check,
+        fast_mode=fast_mode,
         timeout=WEB_SEARCH_TIMEOUT_FAST_S if fast_mode else WEB_SEARCH_TIMEOUT_S,
     )
 
@@ -92,7 +96,7 @@ async def memory_searcher_agent(query: str, user_id: str = "", session_id: str =
     session_id 非空时按会话隔离,只检索本会话写入的记忆;空串=不过滤(全局检索)。
     fast_mode: 快速模式下如果 embedding 模型未加载完则快速跳过，不阻塞等待。
     """
-    from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
+    from core.memory_client import _MEMORY_SYSTEM_AVAILABLE, get_memory_store
 
     async def _do_search(q: str, uid: str, sess: str) -> str:
         if not _MEMORY_SYSTEM_AVAILABLE:
@@ -110,7 +114,7 @@ async def memory_searcher_agent(query: str, user_id: str = "", session_id: str =
             init_timeout = 10.0 if fast_mode else 60.0
             try:
                 await asyncio.wait_for(store.initialize(), timeout=init_timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"Memory store initialization timed out (>{init_timeout}s)")
                 return ""
 
@@ -120,7 +124,7 @@ async def memory_searcher_agent(query: str, user_id: str = "", session_id: str =
                 store.retrieve(q, top_k=5, user_id=uid, source=sess),
                 timeout=retrieve_timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"Memory retrieve timed out (>{retrieve_timeout}s)")
             return ""
         if memories:
@@ -135,7 +139,7 @@ async def knowledge_searcher_agent(query: str, user_id: str = "") -> str:
     from core.rag import search_knowledge
 
     def _check(result: str) -> bool:
-        return result and "知识库为空" not in result and "未启用" not in result
+        return bool(result and "知识库为空" not in result and "未启用" not in result)
 
     return await _safe_search(
         lambda q: search_knowledge(q, top_k=3),
@@ -150,18 +154,19 @@ async def run_parallel_search(state: dict) -> str:
     # 取最后一条 HumanMessage 的内容作为搜索关键词，避免 Coordinator
     # 的 route 回复被当成查询（协调模式下 messages[-1] 是 AIMessage）。
     from langchain_core.messages import HumanMessage
+
     user_message = ""
     msgs = state.get("messages", [])
     if msgs:
         # 最后一条通常是用户消息（快速模式），直接检查避免遍历
         last_msg = msgs[-1]
         if isinstance(last_msg, HumanMessage):
-            user_message = last_msg.content
+            user_message = cast(str, last_msg.content)
         else:
             # 回退：反向遍历找最近的用户消息
             for msg in reversed(msgs):
                 if isinstance(msg, HumanMessage):
-                    user_message = msg.content
+                    user_message = cast(str, msg.content)
                     break
     if not user_message:
         user_message = msgs[-1].content if msgs else ""

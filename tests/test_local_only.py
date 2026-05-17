@@ -19,6 +19,7 @@ def app_with_local_only():
         if remote == "localhost":
             return True
         import ipaddress
+
         try:
             addr = ipaddress.ip_address(remote)
         except ValueError:
@@ -33,6 +34,7 @@ def app_with_local_only():
     @app.before_request
     def restrict_local_only():
         from flask import request
+
         path = request.path
         for prefix in LOCAL_ONLY_PREFIXES:
             if path.startswith(prefix):

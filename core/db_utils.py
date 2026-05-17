@@ -1,9 +1,9 @@
 """SQLite 数据库连接工具 - 统一连接逻辑，消除重复"""
+
 import os
 import sqlite3
 import threading
 import time
-
 
 _THREAD_LOCAL = threading.local()
 # 线程本地连接最大存活时间（秒），超时后自动重建，避免连接无限累积

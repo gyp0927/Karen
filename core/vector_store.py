@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import threading
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ _DEFAULT_CHROMA_PATH = os.path.join(_PROJECT_ROOT, "data", "chroma_db")
 
 
 # ========== 抽象基类 ==========
+
 
 class VectorStoreBackend(abc.ABC):
     """向量存储后端抽象基类。"""
@@ -58,10 +59,11 @@ class VectorStoreBackend(abc.ABC):
 
 try:
     import numpy as np
+
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False
-    np = None  # type: ignore
+    np = None
 
 
 class NumpyBackend(VectorStoreBackend):
@@ -85,14 +87,14 @@ class NumpyBackend(VectorStoreBackend):
         self._lock = threading.RLock()
         self._dirty = False
         # 预计算并缓存归一化向量，避免每次搜索重复计算
-        self._norm_vectors: "np.ndarray | None" = None
+        self._norm_vectors: np.ndarray | None = None
         self._load()
 
     def _load(self):
         if not HAS_NUMPY or not os.path.exists(_STORE_PATH):
             return
         try:
-            with open(_STORE_PATH, "r", encoding="utf-8") as f:
+            with open(_STORE_PATH, encoding="utf-8") as f:
                 data = json.load(f)
             for item in data:
                 self.vectors.append(np.array(item["vector"], dtype=np.float32))
@@ -109,11 +111,13 @@ class NumpyBackend(VectorStoreBackend):
             os.makedirs(_STORE_DIR, exist_ok=True)
             data = []
             for i in range(len(self.vectors)):
-                data.append({
-                    "vector": self.vectors[i].tolist(),
-                    "text": self.texts[i],
-                    "metadata": self.metadatas[i],
-                })
+                data.append(
+                    {
+                        "vector": self.vectors[i].tolist(),
+                        "text": self.texts[i],
+                        "metadata": self.metadatas[i],
+                    }
+                )
             with open(_STORE_PATH, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
         except Exception:
@@ -137,7 +141,7 @@ class NumpyBackend(VectorStoreBackend):
             if not self.vectors:
                 return []
             if query_vector.shape != self.vectors[0].shape:
-                logger.warning(f"Query vector dimension mismatch")
+                logger.warning("Query vector dimension mismatch")
                 return []
             # 复用预计算的归一化向量，避免每次搜索重复计算
             if self._norm_vectors is None:
@@ -172,7 +176,7 @@ class NumpyBackend(VectorStoreBackend):
 
     def list_documents(self) -> list[dict]:
         with self._lock:
-            sources = {}
+            sources: dict[str, int] = {}
             for meta in self.metadatas:
                 source = meta.get("source", "未知来源")
                 sources[source] = sources.get(source, 0) + 1
@@ -197,10 +201,11 @@ class NumpyBackend(VectorStoreBackend):
 try:
     import chromadb
     from chromadb.config import Settings
+
     HAS_CHROMA = True
 except ImportError:
     HAS_CHROMA = False
-    chromadb = None  # type: ignore
+    chromadb = None
 
 
 class ChromaBackend(VectorStoreBackend):
@@ -211,15 +216,18 @@ class ChromaBackend(VectorStoreBackend):
             raise ImportError("ChromaDB 未安装。请运行: pip install chromadb")
         self.persist_path = persist_path or _DEFAULT_CHROMA_PATH
         os.makedirs(self.persist_path, exist_ok=True)
-        self.client = chromadb.Client(Settings(
-            persist_directory=self.persist_path,
-            anonymized_telemetry=False,
-        ))
+        self.client = chromadb.Client(
+            Settings(
+                persist_directory=self.persist_path,
+                anonymized_telemetry=False,
+            )
+        )
         self.collection = self.client.get_or_create_collection("rag_documents")
         logger.info(f"Chroma backend initialized at {self.persist_path}")
 
     def add(self, vector: Any, text: str, metadata: dict = None, auto_save: bool = True):
         import uuid
+
         meta = metadata or {}
         self.collection.add(
             embeddings=[vector.tolist() if hasattr(vector, "tolist") else list(vector)],
@@ -234,11 +242,13 @@ class ChromaBackend(VectorStoreBackend):
         output = []
         if results["documents"] and results["documents"][0]:
             for i in range(len(results["documents"][0])):
-                output.append({
-                    "text": results["documents"][0][i],
-                    "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
-                    "score": float(results["distances"][0][i]) if results["distances"] else 0.0,
-                })
+                output.append(
+                    {
+                        "text": results["documents"][0][i],
+                        "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
+                        "score": float(results["distances"][0][i]) if results["distances"] else 0.0,
+                    }
+                )
         return output
 
     def clear(self):
@@ -256,10 +266,10 @@ class ChromaBackend(VectorStoreBackend):
         if count == 0:
             return []
         results = self.collection.get(limit=count, include=["metadatas"])
-        sources = {}
+        sources: dict[str, int] = {}
         for meta in results.get("metadatas", []):
             if meta:
-                source = meta.get("source", "未知来源")
+                source = str(meta.get("source", "未知来源"))
                 sources[source] = sources.get(source, 0) + 1
         return [{"source": s, "chunks": c} for s, c in sorted(sources.items())]
 
@@ -281,10 +291,11 @@ class ChromaBackend(VectorStoreBackend):
 
 # ========== 工厂函数 ==========
 
+
 def _get_backend_from_config() -> str:
     try:
         if os.path.exists(_CONFIG_FILE):
-            with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+            with open(_CONFIG_FILE, encoding="utf-8") as f:
                 data = json.load(f)
             return data.get("backend", "numpy")
     except Exception:

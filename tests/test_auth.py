@@ -5,14 +5,15 @@ import pytest
 
 def test_auth_db_initialization():
     """认证数据库在模块导入时已自动初始化。"""
-    from core.auth import _DB_PATH
     import os
+
+    from core.auth import _DB_PATH
 
     assert os.path.exists(_DB_PATH)
 
 
 def test_password_hashing():
-    from core.auth import _hash_password, _check_password, _BCRYPT_AVAILABLE
+    from core.auth import _BCRYPT_AVAILABLE, _check_password, _hash_password
 
     if not _BCRYPT_AVAILABLE:
         pytest.skip("bcrypt 未安装")
@@ -24,8 +25,8 @@ def test_password_hashing():
 
 
 def test_derive_key():
+
     from core.auth import _derive_key
-    import hashlib
 
     salt = b"test_salt_123456"
     key1 = _derive_key("api_key_1", salt)
@@ -38,7 +39,7 @@ def test_derive_key():
 
 
 def test_rate_limit():
-    from core.auth import _check_rate_limit, _record_auth_failure, _auth_failures
+    from core.auth import _auth_failures, _check_rate_limit, _record_auth_failure
 
     ip = "127.0.0.1"
     # 清理该 IP 的历史记录

@@ -1,13 +1,13 @@
 """HTTP API Blueprint - 从 web.app 拆分出来的路由。"""
+
 import ast
-import io
 import logging
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
-from flask import Blueprint, request, send_file, render_template, redirect, session
+from flask import Blueprint, redirect, render_template, request, send_file, session
 from werkzeug.utils import secure_filename
 
 api_bp = Blueprint("api", __name__)
@@ -16,30 +16,44 @@ logger = logging.getLogger(__name__)
 # 延迟加载符号（避免循环导入）
 _GENERATED_DIR = None
 
+
 def _get_generated_dir():
     global _GENERATED_DIR
     if _GENERATED_DIR is None:
         from web.utils import _GENERATED_DIR as gd
+
         _GENERATED_DIR = gd
     return _GENERATED_DIR
 
-from core.auth import (
-    auth_required, admin_required, AUTH_ENABLED, create_user, authenticate,
-    authenticate_password, get_user_by_id, list_users, delete_user, update_user_config,
+
+from agents.llm import clear_llm_cache  # noqa: E402
+from core.auth import (  # noqa: E402
+    AUTH_ENABLED,
+    admin_required,
+    auth_required,
+    authenticate,
+    authenticate_password,
+    create_user,
+    delete_user,
+    list_users,
 )
-from core.config import PROVIDER_NAMES, BASE_URLS
-from core.export import export_markdown, export_json, export_html, export_pdf, get_export_filename
-from core.plugin_system import list_plugins, get_registry, execute_plugin
-from core.model_router import get_router
-from agents.llm import clear_llm_cache
-from state.model_config_manager import (
-    list_configs, list_configs_full, get_active_config,
-    add_config, update_config, delete_config, set_active_config, sync_to_env,
+from core.config import BASE_URLS  # noqa: E402
+from core.model_router import get_router  # noqa: E402
+from core.plugin_system import execute_plugin, get_registry, list_plugins  # noqa: E402
+from state.model_config_manager import (  # noqa: E402
+    add_config,
+    delete_config,
+    get_active_config,
+    list_configs,
+    list_configs_full,
+    set_active_config,
+    sync_to_env,
+    update_config,
 )
-from state.stats import record_call, estimate_cost, get_stats_summary, get_daily_stats, CallRecord
-from web.state import has_valid_config
+from web.state import has_valid_config  # noqa: E402
 
 # ===== HTTP Routes =====
+
 
 @api_bp.route("/")
 def index():
@@ -99,14 +113,11 @@ def upload_file():
 
     try:
         from core.document_parser import parse_document, truncate_text
+
         content = parse_document(file_path)
         truncated = truncate_text(content)
         logger.info(f"Uploaded file parsed: {file.filename}, length={len(content)}")
-        return {
-            "success": True,
-            "filename": file.filename,
-            "content": truncated
-        }
+        return {"success": True, "filename": file.filename, "content": truncated}
     except Exception as e:
         logger.exception(f"Failed to parse file: {file.filename}")
         return {"success": False, "message": f"解析失败: {str(e)}"}, 500
@@ -140,8 +151,14 @@ def generate_file():
             safe_name = "generated"
 
         ext_map = {
-            "html": "html", "doc": "doc", "txt": "txt", "md": "md",
-            "css": "css", "js": "js", "json": "json", "py": "py",
+            "html": "html",
+            "doc": "doc",
+            "txt": "txt",
+            "md": "md",
+            "css": "css",
+            "js": "js",
+            "json": "json",
+            "py": "py",
         }
         ext = ext_map.get(file_format, file_format)
         full_filename = f"{safe_name}.{ext}"
@@ -167,7 +184,7 @@ def generate_file():
             "success": True,
             "filename": full_filename,
             "download_url": f"/api/download/{full_filename}",
-            "message": f"文件已生成: {full_filename}"
+            "message": f"文件已生成: {full_filename}",
         }
     except Exception as e:
         logger.exception("Failed to generate file")
@@ -208,10 +225,14 @@ def download_file(filename):
 
         ext = target.suffix.lower()
         mime_map = {
-            ".html": "text/html", ".doc": "application/msword",
-            ".txt": "text/plain", ".md": "text/markdown",
-            ".css": "text/css", ".js": "application/javascript",
-            ".json": "application/json", ".py": "text/x-python",
+            ".html": "text/html",
+            ".doc": "application/msword",
+            ".txt": "text/plain",
+            ".md": "text/markdown",
+            ".css": "text/css",
+            ".js": "application/javascript",
+            ".json": "application/json",
+            ".py": "text/x-python",
         }
         mimetype = mime_map.get(ext, "application/octet-stream")
 
@@ -223,16 +244,13 @@ def download_file(filename):
 
 # ===== Config API Routes =====
 
+
 @api_bp.route("/api/configs", methods=["GET"])
 def get_configs():
     """获取所有保存的模型配置列表"""
     configs = list_configs()
     active = get_active_config()
-    return {
-        "success": True,
-        "configs": configs,
-        "activeConfigId": active.get("id") if active else None
-    }
+    return {"success": True, "configs": configs, "activeConfigId": active.get("id") if active else None}
 
 
 @api_bp.route("/api/configs", methods=["POST"])
@@ -256,20 +274,21 @@ def save_config_api():
         base_url = BASE_URLS.get(provider, BASE_URLS.get("ollama", ""))
 
         if config_id:
-            result = update_config(config_id, name=name, provider=provider, model=model,
-                                   apiKey=api_key, baseUrl=base_url)
+            result = update_config(
+                config_id, name=name, provider=provider, model=model, apiKey=api_key, baseUrl=base_url
+            )
             if result:
                 active = get_active_config()
                 if active and active.get("id") == config_id:
                     sync_to_env(active)
                     clear_llm_cache()
                     from web.state import init_agents
+
                     init_agents()
                 return {"success": True, "message": "配置已更新", "config": result}
             return {"success": False, "message": "配置不存在"}, 404
         else:
-            result = add_config(name=name, provider=provider, model=model,
-                                api_key=api_key, base_url=base_url)
+            result = add_config(name=name, provider=provider, model=model, api_key=api_key, base_url=base_url)
             all_configs = list_configs_full()
             if len(all_configs) == 1:
                 active = get_active_config()
@@ -277,6 +296,7 @@ def save_config_api():
                     sync_to_env(active)
                     clear_llm_cache()
                     from web.state import init_agents
+
                     init_agents()
             return {"success": True, "message": "配置已保存", "config": result}
     except Exception as e:
@@ -295,6 +315,7 @@ def delete_config_api(config_id):
                 sync_to_env(active)
                 clear_llm_cache()
                 from web.state import init_agents
+
                 init_agents()
             return {"success": True, "message": "配置已删除"}
         return {"success": False, "message": "配置不存在"}, 404
@@ -314,6 +335,7 @@ def activate_config_api(config_id):
                 sync_to_env(active)
                 clear_llm_cache()
                 from web.state import init_agents
+
                 init_agents()
             return {"success": True, "message": "配置已激活"}
         return {"success": False, "message": "配置不存在"}, 404
@@ -337,6 +359,7 @@ def test_config_api():
 
         if provider == "ollama":
             import requests
+
             try:
                 resp = requests.get("http://localhost:11434/api/tags", timeout=5)
                 if resp.status_code == 200:
@@ -359,6 +382,7 @@ def test_config_api():
             return {"success": False, "message": f"未知提供商: {provider}"}
 
         import requests
+
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         try:
@@ -373,11 +397,7 @@ def test_config_api():
             logger.debug(f"GET /models failed for {provider}, falling back to chat test: {e}")
 
         try:
-            body = {
-                "model": model or "gpt-3.5-turbo",
-                "messages": [{"role": "user", "content": "Hi"}],
-                "max_tokens": 1
-            }
+            body = {"model": model or "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 1}
             resp = requests.post(f"{base_url}/chat/completions", headers=headers, json=body, timeout=20)
             if resp.status_code == 200:
                 return {"success": True, "message": "API 连接正常，模型可正常调用"}
@@ -417,10 +437,12 @@ def get_config():
         return {
             "provider": active.get("provider", "ollama"),
             "model": active.get("model", ""),
-            "apiKey": _mask_api_key(active.get("apiKey", ""))
+            "apiKey": _mask_api_key(active.get("apiKey", "")),
         }
-    from core.config import get_provider, get_model_name
     import os
+
+    from core.config import get_model_name, get_provider
+
     provider = request.args.get("provider", get_provider()).lower()
     key_env_name = f"LLM_API_KEY_{provider.upper().replace('-', '_')}"
     api_key = os.getenv(key_env_name, "")
@@ -429,7 +451,7 @@ def get_config():
     return {
         "provider": provider,
         "model": get_model_name() if provider == get_provider() else "",
-        "apiKey": _mask_api_key(api_key)
+        "apiKey": _mask_api_key(api_key),
     }
 
 
@@ -440,6 +462,7 @@ def legacy_save_config():
 
 
 # ===== Plugin API Routes =====
+
 
 @api_bp.route("/api/plugins", methods=["GET"])
 def get_plugins_api():
@@ -497,52 +520,164 @@ def disable_plugin_api(name):
 # 插件上传安全限制
 _MAX_PLUGIN_SIZE = 256 * 1024  # 256KB
 _PLUGIN_FORBIDDEN_MODULES = {
-    "os", "sys", "subprocess", "ctypes", "socket", "importlib",
-    "urllib", "http", "ftplib", "smtplib", "pickle", "marshal",
-    "shutil", "pathlib", "tempfile", "multiprocessing",
+    "os",
+    "sys",
+    "subprocess",
+    "ctypes",
+    "socket",
+    "importlib",
+    "urllib",
+    "http",
+    "ftplib",
+    "smtplib",
+    "pickle",
+    "marshal",
+    "shutil",
+    "pathlib",
+    "tempfile",
+    "multiprocessing",
 }
 _PLUGIN_FORBIDDEN_CALLS = {
-    "eval", "exec", "compile", "__import__", "open", "input",
-    "system", "popen", "call", "run", "spawn", "fork",
-    "getattr", "setattr", "delattr",
-    "import_module", "find_loader", "spec_from_file_location",
+    "eval",
+    "exec",
+    "compile",
+    "__import__",
+    "open",
+    "input",
+    "system",
+    "popen",
+    "call",
+    "run",
+    "spawn",
+    "fork",
+    "getattr",
+    "setattr",
+    "delattr",
+    "import_module",
+    "find_loader",
+    "spec_from_file_location",
 }
 _PLUGIN_FORBIDDEN_ATTRS = {
-    "__class__", "__bases__", "__base__", "__subclasses__",
-    "__mro__", "__globals__", "__builtins__", "__import__",
+    "__class__",
+    "__bases__",
+    "__base__",
+    "__subclasses__",
+    "__mro__",
+    "__globals__",
+    "__builtins__",
+    "__import__",
     "__getattribute__",
 }
 
 # 白名单：仅允许这些 AST 节点类型存在（防御未知语法绕过）
 _PLUGIN_ALLOWED_NODES: set[type] = {
-    ast.Module, ast.Expression, ast.Interactive,
-    ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
-    ast.Return, ast.Delete, ast.Assign, ast.AugAssign, ast.AnnAssign,
-    ast.For, ast.While, ast.If, ast.With, ast.Try, ast.TryStar,
-    ast.ExceptHandler, ast.Raise, ast.Assert, ast.Pass, ast.Break, ast.Continue,
-    ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal,
-    ast.Expr, ast.TypeIgnore,
-    ast.BoolOp, ast.NamedExpr, ast.BinOp, ast.UnaryOp, ast.Lambda, ast.IfExp,
-    ast.Dict, ast.Set, ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp,
-    ast.Await, ast.Yield, ast.YieldFrom,
-    ast.Compare, ast.Call,
-    ast.FormattedValue, ast.JoinedStr, ast.Constant,
-    ast.Attribute, ast.Subscript, ast.Starred,
-    ast.Name, ast.List, ast.Tuple, ast.Slice,
-    ast.Load, ast.Store, ast.Del,
-    ast.And, ast.Or,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
-    ast.LShift, ast.RShift, ast.BitOr, ast.BitXor, ast.BitAnd, ast.MatMult,
-    ast.Invert, ast.Not, ast.UAdd, ast.USub,
-    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Is, ast.IsNot, ast.In, ast.NotIn,
-    ast.comprehension, ast.arguments, ast.arg, ast.keyword,
-    ast.alias, ast.withitem,
+    ast.Module,
+    ast.Expression,
+    ast.Interactive,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Return,
+    ast.Delete,
+    ast.Assign,
+    ast.AugAssign,
+    ast.AnnAssign,
+    ast.For,
+    ast.While,
+    ast.If,
+    ast.With,
+    ast.Try,
+    ast.TryStar,
+    ast.ExceptHandler,
+    ast.Raise,
+    ast.Assert,
+    ast.Pass,
+    ast.Break,
+    ast.Continue,
+    ast.Import,
+    ast.ImportFrom,
+    ast.Global,
+    ast.Nonlocal,
+    ast.Expr,
+    ast.TypeIgnore,
+    ast.BoolOp,
+    ast.NamedExpr,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Lambda,
+    ast.IfExp,
+    ast.Dict,
+    ast.Set,
+    ast.ListComp,
+    ast.SetComp,
+    ast.GeneratorExp,
+    ast.DictComp,
+    ast.Await,
+    ast.Yield,
+    ast.YieldFrom,
+    ast.Compare,
+    ast.Call,
+    ast.FormattedValue,
+    ast.JoinedStr,
+    ast.Constant,
+    ast.Attribute,
+    ast.Subscript,
+    ast.Starred,
+    ast.Name,
+    ast.List,
+    ast.Tuple,
+    ast.Slice,
+    ast.Load,
+    ast.Store,
+    ast.Del,
+    ast.And,
+    ast.Or,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.Pow,
+    ast.LShift,
+    ast.RShift,
+    ast.BitOr,
+    ast.BitXor,
+    ast.BitAnd,
+    ast.MatMult,
+    ast.Invert,
+    ast.Not,
+    ast.UAdd,
+    ast.USub,
+    ast.Eq,
+    ast.NotEq,
+    ast.Lt,
+    ast.LtE,
+    ast.Gt,
+    ast.GtE,
+    ast.Is,
+    ast.IsNot,
+    ast.In,
+    ast.NotIn,
+    ast.comprehension,
+    ast.arguments,
+    ast.arg,
+    ast.keyword,
+    ast.alias,
+    ast.withitem,
 }
 # 动态添加版本相关节点（Python 3.10+ Match 语句等）
 for _node_name in (
-    "Match", "match_case", "MatchValue", "MatchSingleton",
-    "MatchSequence", "MatchMapping", "MatchClass",
-    "MatchStar", "MatchAs", "MatchOr",
+    "Match",
+    "match_case",
+    "MatchValue",
+    "MatchSingleton",
+    "MatchSequence",
+    "MatchMapping",
+    "MatchClass",
+    "MatchStar",
+    "MatchAs",
+    "MatchOr",
 ):
     _node_cls = getattr(ast, _node_name, None)
     if _node_cls is not None:
@@ -555,9 +690,7 @@ def _is_safe_plugin_filename(filename: str) -> bool:
         return False
     name = filename[:-3]
     # 只允许 ASCII 字母、数字、下划线、连字符
-    return name.isidentifier() or all(
-        (c.isascii() and c.isalnum()) or c in "_-" for c in name
-    )
+    return name.isidentifier() or all((c.isascii() and c.isalnum()) or c in "_-" for c in name)
 
 
 def _scan_plugin_content(content: str) -> list[str]:
@@ -658,7 +791,10 @@ def upload_plugin_api():
             return {"success": False, "message": "文件名为空"}, 400
 
         if not _is_safe_plugin_filename(file.filename):
-            return {"success": False, "message": "文件名不合法（只允许 .py 文件，文件名只能包含字母、数字、下划线、连字符）"}, 400
+            return {
+                "success": False,
+                "message": "文件名不合法（只允许 .py 文件，文件名只能包含字母、数字、下划线、连字符）",
+            }, 400
 
         content = file.read().decode("utf-8", errors="replace")
         if len(content) > _MAX_PLUGIN_SIZE:
@@ -669,6 +805,7 @@ def upload_plugin_api():
             return {"success": False, "message": f"安全扫描未通过: {'; '.join(issues)}"}, 400
 
         import core.plugin_system as ps
+
         plugins_dir = Path(ps._PLUGINS_DIR)
         plugins_dir.mkdir(parents=True, exist_ok=True)
 
@@ -687,11 +824,13 @@ def upload_plugin_api():
 
 # ===== Cache API Routes =====
 
+
 @api_bp.route("/api/cache/stats", methods=["GET"])
 def get_cache_stats_api():
     """获取缓存统计"""
     try:
         from core.cache import get_cache
+
         stats = get_cache().get_stats()
         return {"success": True, "stats": stats}
     except Exception as e:
@@ -705,6 +844,7 @@ def clear_cache_api():
     """清空缓存"""
     try:
         from core.cache import get_cache
+
         get_cache().clear()
         return {"success": True, "message": "缓存已清空"}
     except Exception as e:
@@ -718,6 +858,7 @@ def config_cache_api():
     """配置缓存参数"""
     try:
         from core.cache import configure_cache
+
         data = request.get_json() or {}
         enabled = data.get("enabled", True)
         ttl_hours = data.get("ttl_hours", 24)
@@ -730,11 +871,13 @@ def config_cache_api():
 
 # ===== RAG Backend API Routes =====
 
+
 @api_bp.route("/api/rag/backends", methods=["GET"])
 def get_rag_backends_api():
     """获取可用的向量存储后端列表"""
     try:
-        from core.vector_store import list_backends, _get_backend_from_config
+        from core.vector_store import _get_backend_from_config, list_backends
+
         return {
             "success": True,
             "backends": list_backends(),
@@ -750,8 +893,9 @@ def get_rag_backends_api():
 def set_rag_backend_api():
     """切换向量存储后端"""
     try:
-        from core.vector_store import set_backend
         from core.rag import reset_store
+        from core.vector_store import set_backend
+
         data = request.get_json() or {}
         backend = data.get("backend", "numpy")
         persist_path = data.get("persist_path")
@@ -768,6 +912,7 @@ def set_rag_backend_api():
 
 # ===== MCP API Routes =====
 
+
 @api_bp.route("/mcp")
 def mcp_page():
     """MCP 服务器管理页面"""
@@ -779,6 +924,7 @@ def list_mcp_servers_api():
     """列出所有 MCP 服务器"""
     try:
         from core.mcp_manager import get_mcp_manager
+
         servers = get_mcp_manager().list_servers()
         return {"success": True, "servers": servers}
     except Exception as e:
@@ -792,6 +938,7 @@ def add_mcp_server_api():
     """添加 MCP 服务器"""
     try:
         from core.mcp_manager import get_mcp_manager
+
         data = request.get_json() or {}
         name = data.get("name", "").strip()
         if not name:
@@ -807,6 +954,7 @@ def add_mcp_server_api():
         )
         # 重新加载插件以包含新 MCP 工具
         from core.plugin_system import get_registry
+
         get_registry().discover()
         return {"success": True, "message": f"服务器 '{name}' 已添加"}
     except Exception as e:
@@ -820,8 +968,10 @@ def delete_mcp_server_api(name):
     """删除 MCP 服务器"""
     try:
         from core.mcp_manager import get_mcp_manager
+
         if get_mcp_manager().remove_server(name):
             from core.plugin_system import get_registry
+
             get_registry().discover()
             return {"success": True, "message": f"服务器 '{name}' 已删除"}
         return {"success": False, "message": "服务器不存在"}, 404
@@ -836,10 +986,12 @@ def toggle_mcp_server_api(name):
     """启用/禁用 MCP 服务器"""
     try:
         from core.mcp_manager import get_mcp_manager
+
         data = request.get_json() or {}
         enabled = data.get("enabled", True)
         if get_mcp_manager().toggle_server(name, enabled):
             from core.plugin_system import get_registry
+
             get_registry().discover()
             return {"success": True, "message": f"服务器 '{name}' 已{'启用' if enabled else '禁用'}"}
         return {"success": False, "message": "服务器不存在"}, 404
@@ -853,6 +1005,7 @@ def list_mcp_tools_api():
     """列出所有 MCP 工具"""
     try:
         from core.mcp_manager import list_mcp_tools
+
         tools = list_mcp_tools()
         return {"success": True, "tools": tools}
     except Exception as e:
@@ -866,6 +1019,7 @@ def call_mcp_tool_api(server, tool):
     """测试调用 MCP 工具"""
     try:
         from core.mcp_manager import get_mcp_manager
+
         data = request.get_json() or {}
         args = data.get("args", {})
         result = get_mcp_manager().call_tool(server, tool, args)
@@ -876,6 +1030,7 @@ def call_mcp_tool_api(server, tool):
 
 
 # ===== Model Router API Routes =====
+
 
 @api_bp.route("/api/router/status", methods=["GET"])
 def get_router_status_api():
@@ -898,6 +1053,7 @@ def config_router_api():
     """配置模型路由"""
     try:
         from core.model_router import configure_router
+
         data = request.get_json() or {}
         enabled = data.get("enabled", True)
         configure_router(enabled=enabled)
@@ -926,6 +1082,7 @@ def set_router_tier_api(tier):
 
 
 # ===== Auth API Routes =====
+
 
 @api_bp.route("/api/auth/status", methods=["GET"])
 def get_auth_status_api():
@@ -1029,6 +1186,7 @@ def delete_user_api(user_id):
         return {"success": False, "message": "认证系统未启用"}, 400
     try:
         from core.auth import get_current_user
+
         current_user = get_current_user()
         if not current_user:
             return {"success": False, "message": "未认证"}, 401
@@ -1040,7 +1198,3 @@ def delete_user_api(user_id):
     except Exception as e:
         logger.exception(f"Failed to delete user {user_id}")
         return {"success": False, "message": str(e)}, 500
-
-
-
-

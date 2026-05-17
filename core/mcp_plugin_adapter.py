@@ -5,8 +5,8 @@
 
 import logging
 
+from core.mcp_manager import call_mcp_tool, list_mcp_tools
 from core.plugin_system import Plugin, get_registry
-from core.mcp_manager import list_mcp_tools, call_mcp_tool
 
 logger = logging.getLogger(__name__)
 
@@ -19,18 +19,9 @@ class MCPToolPlugin(Plugin):
         self._tool_name = tool_name
         self._schema = schema or {}
         super().__init__()
-
-    @property
-    def name(self) -> str:
-        return f"mcp__{self._server_name}__{self._tool_name}"
-
-    @property
-    def description(self) -> str:
-        return self._schema.get("description", f"MCP tool {self._tool_name} from {self._server_name}")
-
-    @property
-    def version(self) -> str:
-        return "1.0.0"
+        self.name = f"mcp__{self._server_name}__{self._tool_name}"
+        self.description = self._schema.get("description", f"MCP tool {self._tool_name} from {self._server_name}")
+        self.version = "1.0.0"
 
     def execute(self, args: dict) -> str:
         return call_mcp_tool(f"{self._server_name}__{self._tool_name}", args)

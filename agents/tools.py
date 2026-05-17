@@ -6,7 +6,6 @@ from langchain_core.messages import SystemMessage
 
 from agents.llm import get_llm
 
-
 TOOL_CALLER_PROMPT = """你是 ToolCaller（工具调用专家）。
 
 你的职责：
@@ -34,18 +33,47 @@ def _need_tool_call(query: str) -> bool:
     if re.match(r"^[\d\s+\-*/().]+$", q) and len(q) <= 20 and any(c.isdigit() for c in q):
         return False
     # 复杂计算关键词（中英文）
-    if any(kw in q for kw in [
-        "计算", "等于多少", "平方", "次方", "百分比", "积分", "导数", "方程",
-        "calculate", "computation", "compute", "square", "power", "percentage",
-        "integral", "derivative", "equation", "solve",
-    ]):
+    if any(
+        kw in q
+        for kw in [
+            "计算",
+            "等于多少",
+            "平方",
+            "次方",
+            "百分比",
+            "积分",
+            "导数",
+            "方程",
+            "calculate",
+            "computation",
+            "compute",
+            "square",
+            "power",
+            "percentage",
+            "integral",
+            "derivative",
+            "equation",
+            "solve",
+        ]
+    ):
         return True
     # 代码执行请求（中英文）
-    if any(kw in q for kw in [
-        "运行代码", "执行代码", "算一下", "验证", "帮我算",
-        "run code", "execute code", "execute python", "run python",
-        "code execution", "python script",
-    ]):
+    if any(
+        kw in q
+        for kw in [
+            "运行代码",
+            "执行代码",
+            "算一下",
+            "验证",
+            "帮我算",
+            "run code",
+            "execute code",
+            "execute python",
+            "run python",
+            "code execution",
+            "python script",
+        ]
+    ):
         return True
     return False
 
@@ -83,8 +111,12 @@ async def tool_caller_node(state: dict, sid: str | None = None) -> dict:
     response = await run_tool_loop(llm, messages, tools, max_iterations=2, sid=sid or "")
 
     if response:
-        return {"messages": [SystemMessage(
-            content=f"【工具执行结果】\n\n{response}",
-            name="tool_caller",
-        )]}
+        return {
+            "messages": [
+                SystemMessage(
+                    content=f"【工具执行结果】\n\n{response}",
+                    name="tool_caller",
+                )
+            ]
+        }
     return {"messages": []}

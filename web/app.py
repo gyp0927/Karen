@@ -1,66 +1,78 @@
 import os
 import shutil
 import sys
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import asyncio
 import functools
 import io
 import logging
 import secrets
-import asyncio
 import tempfile
 import threading
 import time
-import traceback
+from typing import cast
 
-from core.utils import detect_language
-from core.i18n import LANG_NAMES, get_lang_instruction
-
-from flask import Flask, render_template, request, send_file, session
-from flask_socketio import SocketIO, emit
+from flask import Flask, request, send_file, session
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 
-from agents.llm import (
-    set_current_llm_config, set_streaming_callback,
-    clear_streaming_callback, clear_llm_cache, get_llm,
-    get_llm_provider_model,
-)
-from agents.search import web_searcher_agent, memory_searcher_agent
-from agents.tools import tool_caller_node
-from state.stop_flag import clear_stop, is_stopped, set_stop
-from state.model_config_manager import (
-    list_configs, list_configs_full, get_config, get_active_config,
-    add_config, update_config, delete_config, set_active_config, sync_to_env
-)
-from core.config import PROVIDER_NAMES, BASE_URLS, GRAPH_TIMEOUT, TOKEN_FLUSH_CHARS
-from core.rag import add_document, search_knowledge, get_knowledge_stats, clear_knowledge, list_documents, delete_document_by_source
-from core.export import export_markdown, export_json, export_html, export_pdf, get_export_filename
-from core.plugin_system import get_registry, list_plugins, execute_plugin
-from core.model_router import get_router
-from core.auth import (
-    AUTH_ENABLED, create_user, authenticate, get_user_by_id,
-    list_users, delete_user, update_user_config, auth_required
-)
-from state.stats import record_call, estimate_cost, get_stats_summary, get_daily_stats, CallRecord
-from core.memory_client import get_memory_store, _MEMORY_SYSTEM_AVAILABLE
-
-from web.state import (
-    SocketState, socket_states, _socket_states_lock,
-    socket_configs, _socket_configs_lock,
-    get_socket_state, cleanup_socket,
-    start_socket_cleanup, init_agents,
-    has_socket_config, has_valid_config,
-)
 import web.state as _web_state
-from web.utils import _GENERATED_DIR, run_async_in_thread
+from agents.llm import (
+    clear_llm_cache,
+    clear_streaming_callback,
+    get_llm_provider_model,
+    set_current_llm_config,
+    set_streaming_callback,
+)
+from core.auth import (
+    AUTH_ENABLED,
+    auth_required,
+    authenticate,
+    get_user_by_id,
+)
+from core.config import BASE_URLS, GRAPH_TIMEOUT, PROVIDER_NAMES, TOKEN_FLUSH_CHARS
+from core.export import export_html, export_json, export_markdown, export_pdf, get_export_filename
+from core.i18n import LANG_NAMES
+from core.memory_client import _MEMORY_SYSTEM_AVAILABLE, get_memory_store
+from core.model_router import get_router
+from core.rag import (
+    add_document,
+    clear_knowledge,
+    delete_document_by_source,
+    get_knowledge_stats,
+    list_documents,
+)
+from core.utils import detect_language
+from state.model_config_manager import (
+    get_active_config,
+    list_configs,
+    set_active_config,
+    sync_to_env,
+)
+from state.stats import CallRecord, estimate_cost, get_daily_stats, get_stats_summary, record_call
+from state.stop_flag import clear_stop, is_stopped, set_stop
+from web.state import (
+    SocketState,
+    _socket_configs_lock,
+    _socket_states_lock,
+    cleanup_socket,
+    get_socket_state,
+    has_valid_config,
+    init_agents,
+    socket_configs,
+    socket_states,
+    start_socket_cleanup,
+)
+from web.utils import run_async_in_thread
 
 # 模块级预检查 tiktoken：避免每次消息处理都重复 try/import
 _tiktoken_enc = None
 try:
     import tiktoken
+
     _tiktoken_enc = tiktoken.get_encoding("cl100k_base")
 except Exception:
     pass
@@ -84,7 +96,7 @@ def _get_secret_key() -> str:
     if env_key:
         return env_key
     if os.path.exists(_SECRET_KEY_FILE):
-        with open(_SECRET_KEY_FILE, "r", encoding="utf-8") as f:
+        with open(_SECRET_KEY_FILE, encoding="utf-8") as f:
             return f.read().strip()
     key = secrets.token_hex(32)
     os.makedirs(os.path.dirname(_SECRET_KEY_FILE), exist_ok=True)
@@ -105,7 +117,8 @@ CORS(app, origins=_cors_origins)
 socketio = SocketIO(app, cors_allowed_origins=_cors_origins, async_mode="threading")
 
 # 注册 API Blueprint（必须放在 if __name__ 之前，确保 WSGI 入口和 __main__ 入口行为一致）
-from web.api import api_bp
+from web.api import api_bp  # noqa: E402
+
 app.register_blueprint(api_bp)
 
 # 是否信任反向代理传来的 X-Forwarded-For / X-Real-Ip
@@ -113,7 +126,18 @@ app.register_blueprint(api_bp)
 TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() in ("true", "1", "yes")
 
 # 配置相关路由仅允许本机访问（防止局域网用户窃取 API Key、滥用用户管理接口）
-LOCAL_ONLY_PREFIXES = ["/config", "/api/config", "/api/configs", "/knowledge", "/plugins", "/api/plugins/upload", "/mcp", "/api/mcp", "/api/auth/users", "/api/execute"]
+LOCAL_ONLY_PREFIXES = [
+    "/config",
+    "/api/config",
+    "/api/configs",
+    "/knowledge",
+    "/plugins",
+    "/api/plugins/upload",
+    "/mcp",
+    "/api/mcp",
+    "/api/auth/users",
+    "/api/execute",
+]
 
 
 @app.route("/api/export", methods=["POST"])
@@ -133,6 +157,7 @@ def export_chat():
         # 认证启用时，验证会话所有权
         if AUTH_ENABLED:
             from core.auth import get_current_user
+
             current_user = get_current_user()
             if current_user and state.user_id != current_user.id:
                 return {"success": False, "message": "无权访问该会话"}, 403
@@ -163,22 +188,14 @@ def export_chat():
             else:
                 filename = get_export_filename(title, "pdf")
                 return send_file(
-                    io.BytesIO(pdf_bytes),
-                    mimetype="application/pdf",
-                    as_attachment=True,
-                    download_name=filename
+                    io.BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=True, download_name=filename
                 )
         else:
             return {"success": False, "message": f"不支持的格式: {fmt}"}, 400
 
         filename = get_export_filename(title, fmt)
 
-        return send_file(
-            io.BytesIO(content.encode("utf-8")),
-            mimetype=mime,
-            as_attachment=True,
-            download_name=filename
-        )
+        return send_file(io.BytesIO(content.encode("utf-8")), mimetype=mime, as_attachment=True, download_name=filename)
     except Exception as e:
         logger.exception("Export failed")
         return {"success": False, "message": f"导出失败: {str(e)}"}, 500
@@ -297,6 +314,7 @@ def execute_code_api():
             return {"success": False, "message": "代码为空"}, 400
 
         from tools.code_executor import execute_python, format_result
+
         result = execute_python(code, timeout=30)
         return {
             "success": result["success"],
@@ -331,6 +349,7 @@ def _is_local_address(remote: str) -> bool:
     if remote == "localhost":
         return True
     import ipaddress
+
     try:
         addr = ipaddress.ip_address(remote)
     except ValueError:
@@ -348,7 +367,9 @@ def add_security_headers(response):
     """为所有 HTTP 响应添加安全头，降低 XSS/点击劫持/MIME 嗅探风险。"""
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' cdn.jsdelivr.net cdnjs.cloudflare.com unpkg.com; style-src 'self' 'unsafe-inline' cdn.jsdelivr.net cdnjs.cloudflare.com fonts.googleapis.com; font-src 'self' fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:;"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline' cdn.jsdelivr.net cdnjs.cloudflare.com unpkg.com; style-src 'self' 'unsafe-inline' cdn.jsdelivr.net cdnjs.cloudflare.com fonts.googleapis.com; font-src 'self' fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:;"
+    )
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
 
@@ -392,12 +413,14 @@ def _send_history(sid: str):
 
 # ===== SocketIO Events =====
 
+
 def socketio_auth_required(handler):
     """SocketIO 事件处理器认证装饰器。
 
     当 AUTH_ENABLED 为 True 时，检查 socket 状态中的 user_id 是否有效。
     未认证时断开连接并返回错误。
     """
+
     @functools.wraps(handler)
     def wrapper(*args, **kwargs):
         sid = request.sid
@@ -408,6 +431,7 @@ def socketio_auth_required(handler):
                 socketio.disconnect(sid)
                 return None
         return handler(*args, **kwargs)
+
     return wrapper
 
 
@@ -465,10 +489,7 @@ def handle_message(data):
 
     # 检查是否已配置模型
     if not has_valid_config(sid):
-        emit("config_required", {
-            "message": "请先配置 AI 模型",
-            "config_url": "/config"
-        })
+        emit("config_required", {"message": "请先配置 AI 模型", "config_url": "/config"})
         return
 
     clear_stop(sid)
@@ -490,20 +511,25 @@ def handle_message(data):
                 tier_config = route_result["config"]
                 # 合并路由配置到用户配置
                 routed_cfg = dict(user_cfg) if user_cfg else {}
-                routed_cfg.update({
-                    "provider": tier_config.get("provider", routed_cfg.get("provider", "ollama")),
-                    "model": tier_config.get("model", routed_cfg.get("model", "")),
-                })
+                routed_cfg.update(
+                    {
+                        "provider": tier_config.get("provider", routed_cfg.get("provider", "ollama")),
+                        "model": tier_config.get("model", routed_cfg.get("model", "")),
+                    }
+                )
                 if tier_config.get("apiKey"):
                     routed_cfg["apiKey"] = tier_config["apiKey"]
                 if tier_config.get("baseUrl"):
                     routed_cfg["baseUrl"] = tier_config["baseUrl"]
                 user_cfg = routed_cfg
                 logger.info(f"Model routed to tier={route_result['tier']} for sid={sid}")
-                emit("model_routed", {
-                    "tier": route_result["tier"],
-                    "score": route_result["analysis"]["score"],
-                })
+                emit(
+                    "model_routed",
+                    {
+                        "tier": route_result["tier"],
+                        "score": route_result["analysis"]["score"],
+                    },
+                )
     except (OSError, ValueError) as e:
         logger.warning(f"Model routing failed, using default config: {e}")
 
@@ -514,9 +540,7 @@ def handle_message(data):
     state.msg_manager.add_human_message(user_message)
 
     try:
-        run_async_in_thread(_async_handle_message(
-            sid, user_message, document_context, expected_session_id
-        ))
+        run_async_in_thread(_async_handle_message(sid, user_message, document_context, expected_session_id))
     except Exception as e:
         logger.exception(f"Error handling message from sid={sid}")
         emit("error", {"message": str(e)})
@@ -524,8 +548,9 @@ def handle_message(data):
         clear_streaming_callback(sid)
 
 
-def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None,
-                       expected_session_id: str, call_start: float):
+def _record_api_stats(
+    sid: str, messages_for_llm: list, final_state: dict | None, expected_session_id: str, call_start: float
+):
     """记录 API 调用统计"""
     try:
         duration_ms = int((time.time() - call_start) * 1000)
@@ -559,19 +584,25 @@ def _record_api_stats(sid: str, messages_for_llm: list, final_state: dict | None
             status=status,
         )
         record_call(record)
-        logger.debug(f"API call recorded: {provider}/{model}, {duration_ms}ms, {prompt_tokens + completion_tokens} tokens")
+        logger.debug(
+            f"API call recorded: {provider}/{model}, {duration_ms}ms, {prompt_tokens + completion_tokens} tokens"
+        )
 
         # 向前端发送 token 使用统计（使用 socketio.emit 避免后台线程上下文丢失）
         try:
-            socketio.emit("token_usage", {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-                "cost_usd": round(record.estimated_cost_usd, 6),
-                "duration_ms": duration_ms,
-                "provider": provider,
-                "model": model,
-            }, room=sid)
+            socketio.emit(
+                "token_usage",
+                {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                    "cost_usd": round(record.estimated_cost_usd, 6),
+                    "duration_ms": duration_ms,
+                    "provider": provider,
+                    "model": model,
+                },
+                room=sid,
+            )
         except Exception as e:
             logger.debug(f"Failed to emit token_usage: {e}")
     except (ValueError, TypeError) as e:
@@ -588,7 +619,8 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     - 快速/计划模式：并行 2 个搜索子 Agent（联网 + 记忆）
     - 协调模式：并行 3 个搜索子 Agent（联网 + 记忆 + 知识库）
     """
-    from langchain_core.messages import HumanMessage, AIMessage
+    from langchain_core.messages import AIMessage, HumanMessage
+
     state = get_socket_state(sid)
 
     # 获取历史消息（快速模式保留 5 轮，协调模式 10 轮）
@@ -636,7 +668,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
         "human_input_required": False,
         "base_model_response": None,
         "review_result": None,
-        "awaiting_review": True
+        "awaiting_review": True,
     }
 
     # === 提前启动搜索（和 LLM 回复并行）===
@@ -644,6 +676,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 未完成也最多等 0.5s，不阻塞整体回复速度。
     async def _pre_search():
         from agents.search import run_parallel_search
+
         search_state = {
             "messages": messages_for_llm,
             "task_context": {
@@ -719,6 +752,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # 所有模式统一走 LangGraph：Coordinator → Researcher(并行搜索) → Responder
     # 整体超时见模块级 GRAPH_TIMEOUT
     try:
+
         async def _run_graph():
             final = None
             async for event in graph.astream(initial_state):
@@ -729,7 +763,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
             return final
 
         final_state = await asyncio.wait_for(_run_graph(), timeout=GRAPH_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(f"Graph execution timed out after {GRAPH_TIMEOUT}s for sid={sid}")
         clear_streaming_callback(sid)
         clear_stop(sid)
@@ -776,7 +810,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     base_response = ""
     for msg in reversed(final_state.get("messages", [])):
         if isinstance(msg, AIMessage):
-            base_response = msg.content or ""
+            base_response = cast(str, msg.content) or ""
             break
 
     state.current_base_response = base_response
@@ -796,6 +830,7 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
     # source=session_id 是为了让 delete_session 能 cascade 清掉本会话的记忆,
     # 不影响其他会话。user_id 退到 tags 里保留追踪能力。
     if _MEMORY_SYSTEM_AVAILABLE:
+
         async def _save_conversation_memories():
             try:
                 store = get_memory_store()
@@ -821,7 +856,9 @@ async def _async_handle_message(sid: str, user_message: str, document_context: s
                 logger.warning(f"Failed to save conversation memory: {e}")
 
         task = asyncio.create_task(_save_conversation_memories())
-        task.add_done_callback(lambda t: logger.warning(f"Save memory task failed: {t.exception()}") if t.exception() else None)
+        task.add_done_callback(
+            lambda t: logger.warning(f"Save memory task failed: {t.exception()}") if t.exception() else None
+        )
 
 
 @socketio.on("trigger_review")
@@ -856,15 +893,14 @@ async def _async_handle_review(sid: str, expected_session_id: str):
     state = get_socket_state(sid)
 
     from langchain_core.messages import HumanMessage
+
     # 获取用户原始问题
     all_messages = state.msg_manager.get_messages()
     user_message = ""
     for msg in reversed(all_messages):
         if isinstance(msg, HumanMessage):
-            user_message = msg.content
+            user_message = cast(str, msg.content)
             break
-
-    lang_name = "中文" if state.review_language == "zh" else "English"
 
     def _safe_emit_review(event, data):
         try:
@@ -878,16 +914,18 @@ async def _async_handle_review(sid: str, expected_session_id: str):
     try:
         # 构建审查提示
         from agents.prompts import build_review_prompt
+
         review_prompt = build_review_prompt(user_message, state.current_base_response, state.review_language)
 
         # 直接调用 reviewer 节点函数（无需 LangGraph）
+        from langchain_core.messages import SystemMessage
+
         from agents.llm import get_llm
         from agents.prompts import get_reviewer_prompt
-        from langchain_core.messages import SystemMessage
 
         llm = get_llm(sid)
         reviewer_system = get_reviewer_prompt(state.review_language)
-        messages = [SystemMessage(content=reviewer_system)]
+        messages: list[SystemMessage | HumanMessage] = [SystemMessage(content=reviewer_system)]
         messages.append(HumanMessage(content=review_prompt))
 
         review_parts: list[str] = []
@@ -907,10 +945,10 @@ async def _async_handle_review(sid: str, expected_session_id: str):
             logger.info(f"Session changed during review, discarding result for sid={sid}")
             return
 
-        _safe_emit_review("review_complete", {
-            "review_result": review_result or "No review available",
-            "original_response": state.current_base_response
-        })
+        _safe_emit_review(
+            "review_complete",
+            {"review_result": review_result or "No review available", "original_response": state.current_base_response},
+        )
 
         state.current_base_response = None
     finally:
@@ -921,10 +959,7 @@ def _create_new_session(sid: str, state):
     """新建会话的通用逻辑"""
     state.reset_session()
     session_id = state.msg_manager.new_session("新对话")
-    emit("session_created", {
-        "session_id": session_id,
-        "sessions": state.msg_manager.list_sessions()
-    })
+    emit("session_created", {"session_id": session_id, "sessions": state.msg_manager.list_sessions()})
 
 
 @socketio.on("clear_history")
@@ -952,10 +987,7 @@ def handle_switch_session(data):
     session_id = data.get("session_id", "")
     if state.msg_manager.switch_session(session_id):
         state.reset_session()
-        emit("session_switched", {
-            "session_id": session_id,
-            "sessions": state.msg_manager.list_sessions()
-        })
+        emit("session_switched", {"session_id": session_id, "sessions": state.msg_manager.list_sessions()})
         _send_history(sid)
     else:
         emit("error", {"message": "会话不存在"})
@@ -972,14 +1004,12 @@ def handle_delete_session(data):
     if state.msg_manager.delete_session(session_id):
         if is_current:
             state.reset_session()
-        emit("session_deleted", {
-            "session_id": session_id,
-            "sessions": state.msg_manager.list_sessions()
-        })
+        emit("session_deleted", {"session_id": session_id, "sessions": state.msg_manager.list_sessions()})
         _send_history(sid)
         # cascade 清记忆: source=session_id 的记忆从 hot+cold 一起清,
         # 不影响其他会话。fire-and-forget 不阻塞 UI。
         if _MEMORY_SYSTEM_AVAILABLE and session_id:
+
             def _bg_clear_memories():
                 try:
                     n = asyncio.run(get_memory_store().delete_session_memories(session_id))
@@ -987,6 +1017,7 @@ def handle_delete_session(data):
                         logger.info(f"Cleared {n} memories for deleted session {session_id}")
                 except Exception as e:
                     logger.warning(f"Failed to clear memories for session {session_id}: {e}")
+
             threading.Thread(target=_bg_clear_memories, name=f"clear-mem-{session_id[:8]}", daemon=True).start()
     else:
         emit("error", {"message": "删除失败"})
@@ -998,9 +1029,7 @@ def handle_get_sessions():
     """获取所有会话列表"""
     sid = request.sid
     state = get_socket_state(sid)
-    emit("sessions_list", {
-        "sessions": state.msg_manager.list_sessions()
-    })
+    emit("sessions_list", {"sessions": state.msg_manager.list_sessions()})
 
 
 @socketio.on("get_model_info")
@@ -1023,20 +1052,24 @@ def handle_get_model_info():
             name = active.get("name", "")
             server_has_config = True
         else:
-            from core.config import get_provider, get_model_name
+            from core.config import get_model_name, get_provider
+
             provider = get_provider()
             model = get_model_name()
             name = ""
             server_has_config = False
-    emit("model_info", {
-        "provider": provider,
-        "provider_name": PROVIDER_NAMES.get(provider, provider),
-        "model": model,
-        "name": name,
-        "is_local": provider == "ollama",
-        "has_config": cfg is not None,
-        "server_has_config": server_has_config
-    })
+    emit(
+        "model_info",
+        {
+            "provider": provider,
+            "provider_name": PROVIDER_NAMES.get(provider, provider),
+            "model": model,
+            "name": name,
+            "is_local": provider == "ollama",
+            "has_config": cfg is not None,
+            "server_has_config": server_has_config,
+        },
+    )
 
 
 @socketio.on("get_available_models")
@@ -1044,6 +1077,7 @@ def handle_get_model_info():
 def handle_get_available_models():
     """获取可用的模型列表"""
     import requests
+
     models = []
     try:
         # Ollama 本地调用通常 <100ms，1s 超时快速失败避免阻塞线程
@@ -1057,31 +1091,30 @@ def handle_get_available_models():
                 full_name = model_name
                 if size_str:
                     full_name = f"{model_name}:{size_str}"
-                models.append({
-                    "name": model_name,
-                    "full": full_name,
-                    "size": size_str,
-                    "size_bytes": size_bytes,
-                    "modified": m.get("modified_at", "")
-                })
+                models.append(
+                    {
+                        "name": model_name,
+                        "full": full_name,
+                        "size": size_str,
+                        "size_bytes": size_bytes,
+                        "modified": m.get("modified_at", ""),
+                    }
+                )
     except requests.exceptions.RequestException as e:
         logger.debug(f"Failed to fetch Ollama models: {e}")
 
     from core.config import get_model_name
+
     current = get_model_name()
 
-    emit("available_models", {
-        "models": [m["full"] for m in models],
-        "model_details": models,
-        "current": current
-    })
+    emit("available_models", {"models": [m["full"] for m in models], "model_details": models, "current": current})
 
 
 def format_size(bytes_size):
     """格式化文件大小"""
     if not bytes_size:
         return ""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
         if bytes_size < 1024:
             return f"{bytes_size:.1f}{unit}"
         bytes_size /= 1024
@@ -1109,22 +1142,20 @@ def handle_set_model(data):
             else:
                 # 如果 socket 没有配置，使用当前默认 provider 创建新配置
                 from core.config import get_provider
+
                 provider = get_provider()
                 socket_configs[sid] = {
                     "provider": provider,
                     "model": model_name,
                     "apiKey": "",
                     "baseUrl": BASE_URLS.get(provider, ""),
-                    "name": f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}"
+                    "name": f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}",
                 }
 
         clear_llm_cache()
         init_agents()
 
-        emit("model_changed", {
-            "model": model_name,
-            "message": f"Model changed to {model_name}"
-        })
+        emit("model_changed", {"model": model_name, "message": f"Model changed to {model_name}"})
     except Exception as e:
         logger.exception("Failed to change model")
         emit("error", {"message": f"Failed to change model: {str(e)}"})
@@ -1146,14 +1177,17 @@ def handle_activate_config(data):
                 sync_to_env(active)
                 clear_llm_cache()
                 init_agents()
-                emit("config_activated", {
-                    "configId": config_id,
-                    "name": active.get("name", ""),
-                    "provider": active.get("provider", ""),
-                    "provider_name": PROVIDER_NAMES.get(active.get("provider", ""), active.get("provider", "")),
-                    "model": active.get("model", ""),
-                    "message": f"已切换到: {active.get('name', '')}"
-                })
+                emit(
+                    "config_activated",
+                    {
+                        "configId": config_id,
+                        "name": active.get("name", ""),
+                        "provider": active.get("provider", ""),
+                        "provider_name": PROVIDER_NAMES.get(active.get("provider", ""), active.get("provider", "")),
+                        "model": active.get("model", ""),
+                        "message": f"已切换到: {active.get('name', '')}",
+                    },
+                )
         else:
             emit("error", {"message": "配置不存在"})
     except Exception as e:
@@ -1167,10 +1201,7 @@ def handle_get_configs():
     """获取所有配置列表"""
     configs = list_configs()
     active = get_active_config()
-    emit("configs_list", {
-        "configs": configs,
-        "activeConfigId": active.get("id") if active else None
-    })
+    emit("configs_list", {"configs": configs, "activeConfigId": active.get("id") if active else None})
 
 
 @socketio.on("stop_generation")
@@ -1199,10 +1230,7 @@ def handle_set_mode(data):
     mode_name = "快速模式"
 
     logger.info(f"Mode set to fast for sid={sid} (requested: {mode})")
-    emit("mode_changed", {
-        "mode": "fast",
-        "message": f"已切换到{mode_name}"
-    })
+    emit("mode_changed", {"mode": "fast", "message": f"已切换到{mode_name}"})
 
 
 @socketio.on("get_mode")
@@ -1229,10 +1257,9 @@ def handle_set_review_language(data):
         state.review_language = lang
         lang_names = {"zh": "中文", "en": "English"}
         logger.info(f"Review language changed to {lang} for sid={sid}")
-        emit("review_language_changed", {
-            "language": lang,
-            "message": f"审查语言已切换为: {lang_names.get(lang, lang)}"
-        })
+        emit(
+            "review_language_changed", {"language": lang, "message": f"审查语言已切换为: {lang_names.get(lang, lang)}"}
+        )
     except Exception as e:
         logger.exception("Failed to set review language")
         emit("error", {"message": f"切换审查语言失败: {str(e)}"})
@@ -1265,18 +1292,20 @@ def handle_set_user_config(data):
             "model": model,
             "apiKey": api_key,
             "baseUrl": base_url,
-            "name": name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}"
+            "name": name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}",
         }
 
     logger.info(f"User config set for sid={sid}, provider={provider}, model={model}")
-    emit("user_config_set", {
-        "success": True,
-        "provider": provider,
-        "provider_name": PROVIDER_NAMES.get(provider, provider),
-        "model": model,
-        "name": name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}"
-    })
-
+    emit(
+        "user_config_set",
+        {
+            "success": True,
+            "provider": provider,
+            "provider_name": PROVIDER_NAMES.get(provider, provider),
+            "model": model,
+            "name": name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}",
+        },
+    )
 
 
 @socketio.on("disconnect")
@@ -1297,7 +1326,9 @@ if __name__ == "__main__":
     # 失败不阻塞启动(如 API Key 未配置时)。
     try:
         import asyncio
+
         from agents.llm import warmup_connection
+
         asyncio.run(warmup_connection())
     except Exception as e:
         print(f"Connection warmup skipped: {e}")

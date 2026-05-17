@@ -31,7 +31,7 @@ def _load_data() -> dict:
         if _cache_data is not None and mtime == _cache_mtime:
             return _cache_data
     try:
-        with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(_CONFIG_FILE, encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, FileNotFoundError):
         data = {"configs": [], "activeConfigId": None}
@@ -175,7 +175,7 @@ def _mask_key(key: str) -> str:
 def sync_to_env(config: dict):
     """将配置同步到环境变量和 .env 文件（兼容旧系统）"""
     import os
-    from dotenv import load_dotenv
+
 
     provider = config.get("provider", "ollama")
     model = config.get("model", "")
@@ -195,7 +195,7 @@ def sync_to_env(config: dict):
 
     existing = {}
     if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
+        with open(env_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:

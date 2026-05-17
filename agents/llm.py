@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 from collections import OrderedDict
-from typing import Optional, Callable
+from collections.abc import Callable
 
 # 延迟导入 langchain_openai：该包首次导入会拉入 PIL/numpy 等大量依赖，
 # 耗时 ~15-20s。仅在首次创建 LLM 实例时导入，避免模块级导入拖慢启动。
@@ -46,6 +46,7 @@ def _get_http_async_client():
             _httpx_clients.pop(key, None)
         try:
             import httpx
+
             client = httpx.AsyncClient(
                 limits=httpx.Limits(
                     max_connections=100,
@@ -61,6 +62,7 @@ def _get_http_async_client():
         if len(_httpx_clients) > _HTTPX_MAX_CLIENTS:
             _, old_client = _httpx_clients.popitem(last=False)
             from core.utils import spawn_bg
+
             spawn_bg(_close_httpx_client, old_client)
         logger.debug(f"Async HTTP client created for thread={thread_id}, loop={loop_id}")
         return client
@@ -78,8 +80,6 @@ def _close_httpx_client(client):
         pass
 
 
-
-
 # ========== LLM 配置隔离 ==========
 
 _llm_configs: dict[str, dict | None] = {}
@@ -92,13 +92,13 @@ def set_current_llm_config(config: dict | None, sid: str = ""):
     _llm_configs[sid] = config
 
 
-def set_streaming_callback(callback: Optional[Callable[[str], None]], sid: str = ""):
+def set_streaming_callback(callback: Callable[[str], None] | None, sid: str = ""):
     """设置指定 sid 的流式输出 token 回调函数"""
     with _callbacks_lock:
         _token_callbacks[sid] = callback
 
 
-def get_streaming_callback(sid: str = "") -> Optional[Callable[[str], None]]:
+def get_streaming_callback(sid: str = "") -> Callable[[str], None] | None:
     """获取指定 sid 的流式输出回调"""
     with _callbacks_lock:
         return _token_callbacks.get(sid)
@@ -128,7 +128,8 @@ _LLM_CACHE_MAX = 16
 
 def _build_llm_kwargs(sid: str = "") -> dict:
     """构建 LLM 初始化参数"""
-    from core.config import PROVIDER_CONFIG, get_provider, get_api_key, get_base_url, get_model_name
+    from core.config import PROVIDER_CONFIG, get_api_key, get_base_url, get_model_name, get_provider
+
     cfg = _llm_configs.get(sid)
     if cfg:
         provider = cfg.get("provider", "ollama")
@@ -169,7 +170,8 @@ def get_llm_provider_model(sid: str = "") -> tuple[str, str]:
     全局 env 默认值,sid 切档/Web 端用户配置生效后会与实际不一致,导致 cache
     命中错档的响应或 stats 把流量算到错的 provider 上。
     """
-    from core.config import get_provider, get_model_name
+    from core.config import get_model_name, get_provider
+
     cfg = _llm_configs.get(sid)
     if cfg:
         return cfg.get("provider", "ollama"), cfg.get("model", "")
@@ -214,6 +216,7 @@ def get_llm(sid: str = ""):
             kwargs["http_async_client"] = http_async_client
         kwargs["streaming"] = True
         from langchain_openai import ChatOpenAI
+
         instance = ChatOpenAI(**kwargs)
         _llm_cache[cache_key] = instance
         if len(_llm_cache) > _LLM_CACHE_MAX:
@@ -246,6 +249,7 @@ async def warmup_connection(sid: str = "") -> bool:
         cache_key = (loop_id, _make_cache_key(kwargs))
         # 发送一个极短请求触发连接建立,但不等待完整响应
         from langchain_core.messages import HumanMessage
+
         async for _ in llm.astream([HumanMessage(content="hi")]):
             break  # 只取第一个 chunk 就断,目的是建连
         logger.info("LLM connection warmed up")
