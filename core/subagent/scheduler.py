@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
 
 from .base import (
     AggregationStrategy,
@@ -57,7 +57,7 @@ class TaskScheduler:
                 asyncio.gather(*coros, return_exceptions=True),
                 timeout=self.global_timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"[TaskScheduler] Global timeout after {self.global_timeout}s")
             # 超时后，已完成的任务保留结果，未完成的标记为失败
             results = []
@@ -121,7 +121,7 @@ class TaskScheduler:
                     if attempt > 0:
                         logger.info(f"[TaskScheduler] Task {task.id} succeeded after {attempt + 1} attempts")
                     return result
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if attempt == task.retry:
                         logger.warning(f"[TaskScheduler] Task {task.id} timeout after {task.timeout}s")
                         return SubTaskResult(

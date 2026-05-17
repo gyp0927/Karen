@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Callable
+from collections.abc import Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 

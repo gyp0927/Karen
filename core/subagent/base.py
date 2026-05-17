@@ -83,7 +83,6 @@ class LLMSubAgent(SubAgent):
         2. Call LLM with specified temperature/max_tokens
         3. Parse output and return SubTaskResult
         """
-        import asyncio
 
         from agents.llm import get_llm
 
@@ -121,7 +120,7 @@ class LLMSubAgent(SubAgent):
                 output=output,
                 latency_ms=latency_ms,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return SubTaskResult(
                 task_id=task.id,
                 success=False,
