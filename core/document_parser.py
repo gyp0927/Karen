@@ -26,8 +26,8 @@ def _parse_pdf(file_path: str) -> str:
         try:
             from pypdf import PdfReader as _PdfReader
         except ImportError:
-            from PyPDF2 import PdfReader as _PdfReader
-        PdfReader = _PdfReader
+            from PyPDF2 import PdfReader
+            _PdfReader = PdfReader
         parts = []
         with open(file_path, "rb") as f:
             reader = PdfReader(f)
