@@ -99,6 +99,7 @@ class HumanInterface:
                 "user_input": content,
                 "detected_language": self.detected_language,
                 "sid": sid,
+                "session_id": sid,
             },
             "human_input_required": False,
             "base_model_response": None,
@@ -141,6 +142,9 @@ class HumanInterface:
             logger.warning("No AIMessage in graph result; returning fallback response.")
             response = "抱歉,我现在没法回答这个问题。可能是模型暂时无法处理,请稍后再试或换个问法。"
 
+        # 异步保存对话到记忆系统（不阻塞返回）
+        self._schedule_memory_save(content, response, sid)
+
         # 如果启用了审查，执行审查
         if self.review and self.reviewer:
             review_result = await self._do_review(content, response)
@@ -148,6 +152,31 @@ class HumanInterface:
             return f"{response}\n\n--- 审查意见 ---\n{review_result}"
 
         return response
+
+    def _schedule_memory_save(self, user_input: str, response: str, session_id: str) -> None:
+        """将对话保存到记忆系统（fire-and-forget，不阻塞响应）。"""
+
+        async def _do_save() -> None:
+            try:
+                from core.memory_client import get_memory_store
+
+                store = get_memory_store()
+                # 保存用户输入 + 助手回复的摘要
+                memory_content = f"用户: {user_input}\n助手: {response[:500]}"
+                await store.save_memory(
+                    content=memory_content,
+                    memory_type="observation",
+                    source=session_id,
+                    importance=0.5,
+                )
+                logger.debug(f"Memory saved for session {session_id}")
+            except Exception as e:
+                logger.warning(f"Memory save failed: {e}")
+
+        try:
+            asyncio.create_task(_do_save())
+        except Exception as e:
+            logger.warning(f"Failed to schedule memory save: {e}")
 
     async def _do_review(self, user_message: str, base_response: str) -> str:
         """执行审查流程"""

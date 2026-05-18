@@ -161,9 +161,10 @@ async def run_parallel_search(state: dict) -> str:
     if not user_message:
         user_message = msgs[-1].content if msgs else ""
 
-    mode = state.get("task_context", {}).get("mode", "coordination")
-    user_id = state.get("task_context", {}).get("user_id", "")
-    session_id = state.get("task_context", {}).get("session_id", "")
+    task_ctx = state.get("task_context", {})
+    mode = task_ctx.get("mode", "coordination")
+    user_id = task_ctx.get("user_id", "")
+    session_id = task_ctx.get("session_id") or task_ctx.get("sid", "")
     fast_mode = mode in ("fast", "planning")
 
     tasks = []
