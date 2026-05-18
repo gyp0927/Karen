@@ -67,16 +67,69 @@ def _separator(char: str = "─", width: int = 50, color: str = "dim") -> str:
     return _c(color, char * width)
 
 
+# ── 像素头像（ANSI 256 色背景）─────────────────────────────
+_AVATAR_BG = {
+    "h": "\033[48;5;130m",  # 头发-棕色
+    "s": "\033[48;5;223m",  # 肤色-桃色
+    "e": "\033[48;5;16m",   # 眼睛-黑
+    "w": "\033[48;5;15m",   # 眼睛高光-白
+    "m": "\033[48;5;204m",  # 嘴巴-玫红
+}
+
+_AVATAR_PIXELS = [
+    [" ", " ", " ", " ", " ", " ", "h", "h", "h", "h", "h", "h", " ", " "],
+    [" ", " ", " ", " ", "h", "h", "s", "s", "s", "s", "s", "s", "h", "h"],
+    [" ", " ", " ", "h", "s", "s", "s", "s", "s", "s", "s", "s", "s", "h"],
+    [" ", " ", "h", "s", "s", "s", "s", "s", "s", "s", "s", "s", "s", "s"],
+    [" ", " ", "h", "s", "s", "e", "w", "s", "s", "e", "w", "s", "s", "h"],
+    [" ", " ", "h", "s", "s", "s", "s", "s", "s", "s", "s", "s", "s", "h"],
+    [" ", " ", "h", "s", "s", "s", "s", "m", "m", "s", "s", "s", "s", "h"],
+    [" ", " ", " ", "h", "h", "s", "s", "s", "s", "s", "s", "h", "h", " "],
+]
+
+
+def _render_avatar_row(pixels: list[str]) -> str:
+    """将像素行渲染为带 ANSI 背景色的字符串（每个像素 = 2 空格）。"""
+    out = ""
+    current = None
+    for p in pixels:
+        if p == " ":
+            if current != "reset":
+                out += C["reset"]
+                current = "reset"
+            out += "  "
+        else:
+            color = _AVATAR_BG.get(p)
+            if color != current:
+                out += color
+                current = color
+            out += "  "
+    if current != "reset":
+        out += C["reset"]
+    return out
+
+
 async def main():
-    # ── 启动画面 ───────────────────────────────────────────
+    # ── 启动画面（头像 + 标题并排）──────────────────────────
+    avatar_lines = [_render_avatar_row(row) for row in _AVATAR_PIXELS]
+    # 标题区域 28 显示宽度，8 行与头像对齐
+    _T = " " * 28
+    titles = [
+        _T,
+        _c("bold+lcyan", "        ✦  凯 伦  ✦        "),
+        _T,
+        _c("dim", "      输入消息开始对话      "),
+        _T,
+        _c("dim", "    exit退出 /review审查    "),
+        _c("dim", "    /fast模式 /clear清空    "),
+        _T,
+    ]
+
     print()
-    print(_c("bold+lmagenta", "╔" + "═" * 48 + "╗"))
-    print(_c("bold+lmagenta", "║") + " " * 48 + _c("bold+lmagenta", "║"))
-    print(_c("bold+lmagenta", "║") + _c("bold+lcyan", "           ✦    凯 伦    ✦             ".center(48)) + _c("bold+lmagenta", "║"))
-    print(_c("bold+lmagenta", "║") + " " * 48 + _c("bold+lmagenta", "║"))
-    print(_c("bold+lmagenta", "║") + _c("dim", "      Karen AI · Multi-Agent System    ".center(48)) + _c("bold+lmagenta", "║"))
-    print(_c("bold+lmagenta", "║") + " " * 48 + _c("bold+lmagenta", "║"))
-    print(_c("bold+lmagenta", "╚" + "═" * 48 + "╝"))
+    print(_c("bold+lmagenta", "╔" + "═" * 58 + "╗"))
+    for i in range(8):
+        print(_c("bold+lmagenta", "║") + avatar_lines[i] + "  " + titles[i] + _c("bold+lmagenta", "║"))
+    print(_c("bold+lmagenta", "╚" + "═" * 58 + "╝"))
     print()
 
     print(_c("dim", "  正在初始化智能体..."))
@@ -99,18 +152,6 @@ async def main():
         review=False,
         review_language="zh",
     )
-
-    # ── 就绪提示 ───────────────────────────────────────────
-    print()
-    print(_c("lcyan", "┌─ 系统就绪 ") + _c("dim", "─" * 37 + "┐"))
-    print(_c("lcyan", "│") + _c("lwhite", "  输入消息开始对话") + " " * 31 + _c("lcyan", "│"))
-    print(_c("lcyan", "│") + _c("dim", "  命令:") + _c("lyellow", " /review") + _c("dim", " 开关审查") + " " * 21 + _c("lcyan", "│"))
-    print(_c("lcyan", "│") + "        " + _c("lyellow", "/fast  ") + _c("dim", "切换模式") + " " * 21 + _c("lcyan", "│"))
-    print(_c("lcyan", "│") + "        " + _c("lyellow", "/clear ") + _c("dim", "清空对话") + " " * 21 + _c("lcyan", "│"))
-    print(_c("lcyan", "│") + "        " + _c("lyellow", "/history ") + _c("dim", "查看历史") + " " * 18 + _c("lcyan", "│"))
-    print(_c("lcyan", "│") + "        " + _c("lyellow", "exit   ") + _c("dim", "退出程序") + " " * 21 + _c("lcyan", "│"))
-    print(_c("lcyan", "└" + "─" * 48 + "┘"))
-    print()
 
     # 对话循环
     while True:
