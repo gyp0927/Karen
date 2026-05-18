@@ -655,6 +655,7 @@ socket.on("connect", () => {
   if (socket.recovered) {
     socket.emit("get_sessions");
     socket.emit("get_mode");
+    socket.emit("get_model_info");
     if (userConfig) socket.emit("set_user_config", userConfig);
     return;
   }
@@ -669,6 +670,7 @@ socket.on("connect", () => {
   }
   socket.emit("get_sessions");
   socket.emit("get_mode");
+  socket.emit("get_model_info");
   // 如果有本地用户配置，发送给后端
   if (userConfig) {
     socket.emit("set_user_config", userConfig);
@@ -1603,6 +1605,3 @@ if (extensionsOverlay) {
 // ============ Init ============
 
 // Fast mode only — no mode toggle, no agent panel
-
-socket.emit("get_model_info");
-socket.emit("get_mode");
