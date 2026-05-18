@@ -7,7 +7,7 @@
 import json
 import logging
 import threading
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ def list_documents() -> list[dict]:
     """列出知识库中的所有文档（按来源分组）。"""
     store = _get_store()
     if hasattr(store, "list_documents"):
-        return store.list_documents()
+        return cast(list[dict], store.list_documents())
     return []
 
 
@@ -240,5 +240,5 @@ def delete_document_by_source(source: str) -> int:
     if hasattr(store, "delete_by_source"):
         count = store.delete_by_source(source)
         logger.info(f"Deleted {count} chunks from source '{source}'")
-        return count
+        return cast(int, count)
     return 0

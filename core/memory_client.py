@@ -11,7 +11,7 @@ import asyncio
 import logging
 import os
 import threading
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ class _SQLiteMemoryFallback:
             conn = self._get_conn()
             cursor = conn.execute("DELETE FROM memories WHERE source = ?", (session_id,))
             conn.commit()
-            return cursor.rowcount
+            return cast(int, cursor.rowcount)
 
     @staticmethod
     def format_memories_for_prompt(memories: list[dict[str, Any]]) -> str:

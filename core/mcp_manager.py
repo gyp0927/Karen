@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ def _load_config() -> dict:
         return {}
     try:
         with open(_CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f)
+            return cast(dict, json.load(f))
     except Exception:
         return {}
 
@@ -193,7 +194,7 @@ class MCPManager:
 
     def list_tools(self, server_name: str) -> list[dict]:
         """列出指定服务器的所有工具（同步包装）"""
-        return self._run_async(self._alist_tools(server_name))
+        return cast(list[dict], self._run_async(self._alist_tools(server_name)))
 
     def list_all_tools(self) -> list[dict]:
         """列出所有服务器的所有工具"""
@@ -219,7 +220,7 @@ class MCPManager:
 
     def call_tool(self, server_name: str, tool_name: str, arguments: dict) -> str:
         """调用指定服务器的工具（同步包装）"""
-        return self._run_async(self._acall_tool(server_name, tool_name, arguments))
+        return cast(str, self._run_async(self._acall_tool(server_name, tool_name, arguments)))
 
     # ===== 异步内部方法 =====
 

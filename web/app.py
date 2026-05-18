@@ -1003,7 +1003,7 @@ async def _async_handle_review(sid: str, expected_session_id: str):
             if is_stopped(sid):
                 break
             if chunk.content:
-                review_parts.append(chunk.content)
+                review_parts.append(cast(str, chunk.content))
         review_result = "".join(review_parts)
 
         if is_stopped(sid):

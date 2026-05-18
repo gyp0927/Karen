@@ -45,7 +45,7 @@ def _get_llm_sem() -> asyncio.Semaphore:
     if sem is None:
         sem = asyncio.Semaphore(_LLM_SEM_LIMIT)
         _llm_semaphores[loop] = sem
-    return sem
+    return cast(asyncio.Semaphore, sem)
 
 
 # 单条 LLM 流式响应超时（秒）。超时后返回已收到的 partial response。
@@ -701,19 +701,19 @@ async def planner_node(state: dict, sid: str | None = None) -> dict:
 def parse_plan_from_response(text: str) -> dict | None:
     """从 Agent 输出中提取 JSON 计划。"""
     try:
-        return json.loads(text.strip())
+        return cast(dict, json.loads(text.strip()))
     except json.JSONDecodeError:
         pass
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if match:
         try:
-            return json.loads(match.group(1).strip())
+            return cast(dict, json.loads(match.group(1).strip()))
         except json.JSONDecodeError:
             pass
     match = re.search(r"\{[\s\S]*\"title\"[\s\S]*\"steps\"[\s\S]*\}", text)
     if match:
         try:
-            return json.loads(match.group(0))
+            return cast(dict, json.loads(match.group(0)))
         except json.JSONDecodeError:
             pass
     return None

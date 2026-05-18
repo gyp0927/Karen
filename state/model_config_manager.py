@@ -3,6 +3,7 @@ import os
 import threading
 import uuid
 from datetime import datetime
+from typing import cast
 
 _CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state")
 _CONFIG_FILE = os.path.join(_CONFIG_DIR, "model_configs.json")
@@ -38,7 +39,7 @@ def _load_data() -> dict:
     with _cache_lock:
         _cache_data = data
         _cache_mtime = mtime
-    return data
+    return cast(dict, data)
 
 
 def _save_data(data: dict):
@@ -70,7 +71,7 @@ def list_configs() -> list[dict]:
 def list_configs_full() -> list[dict]:
     """获取所有配置列表（包含完整 API Key，仅后端使用）"""
     data = _load_data()
-    return data.get("configs", [])
+    return cast(list[dict], data.get("configs", []))
 
 
 def get_config(config_id: str) -> dict | None:

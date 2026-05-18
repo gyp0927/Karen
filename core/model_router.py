@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +388,7 @@ class ModelRouter:
             env_key = os.getenv(env_var) or os.getenv("LLM_API_KEY")
             if env_key:
                 cfg["apiKey"] = env_key
-        return cfg
+        return cast(dict, cfg)
 
     def get_all_tiers(self) -> dict:
         """获取所有档位配置（API Key 脱敏）。"""

@@ -16,6 +16,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from typing import cast
 
 try:
     import bcrypt
@@ -200,14 +201,14 @@ def _hash_password(password: str) -> str:
     """bcrypt 哈希密码（12 轮次）"""
     if not _BCRYPT_AVAILABLE:
         raise RuntimeError("bcrypt not installed")
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+    return cast(str, bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8"))
 
 
 def _check_password(password: str, hashed: str) -> bool:
     """验证 bcrypt 密码"""
     if not _BCRYPT_AVAILABLE or not hashed:
         return False
-    return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+    return cast(bool, bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8")))
 
 
 def create_user(name: str, api_key: str, config: dict = None, role: str = "user", password: str = "") -> User:
@@ -469,7 +470,7 @@ def get_current_user() -> User | None:
     """获取当前请求的用户（在 auth_required 装饰器保护的路由中可用）。"""
     if not AUTH_ENABLED:
         return None
-    return getattr(request, "current_user", None)
+    return cast(User | None, getattr(request, "current_user", None))
 
 
 # 初始化数据库

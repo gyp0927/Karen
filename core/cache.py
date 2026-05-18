@@ -13,6 +13,7 @@ import os
 import sqlite3
 import threading
 import time
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,7 @@ class ResponseCache:
                 )
                 conn.commit()
                 logger.debug(f"Cache hit: {key_hash[:16]}... (hits={row['hit_count'] + 1})")
-                return row["response"]
+                return cast(str, row["response"])
             return None
 
     def set(self, messages: list, provider: str, model: str, response: str, ttl_seconds: int | None = None):

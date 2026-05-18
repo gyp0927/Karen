@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from typing import cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -327,7 +328,7 @@ def _format_summary(result, scenario: str) -> str:
     total = len(result.results)
 
     header = f"【子 Agent 并行分析结果】\n（{success_count}/{total} 个子任务成功，总耗时 {duration:.1f}s）\n\n"
-    return header + result.final_output
+    return header + cast(str, result.final_output)
 
 
 async def subagent_node(state: dict, sid: str | None = None) -> dict:

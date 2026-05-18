@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import TypeVar, cast
 
 from cognition.types import (
     CognitiveState,
@@ -438,7 +438,7 @@ class PersonaManager:
     def get_persona(self, agent_name: str) -> PersonaConfig:
         """获取人格配置。返回深拷贝防止调用方修改共享状态。"""
         persona = self._personas.get(agent_name, self._default_persona)
-        return copy.deepcopy(persona)
+        return cast(PersonaConfig, copy.deepcopy(persona))
 
     def get_persona_prompt(self, agent_name: str) -> str:
         return self.get_persona(agent_name).to_system_prompt()
@@ -539,4 +539,4 @@ def get_persona_manager() -> PersonaManager:
         mgr.set_persona("responder", RESPONDER_PERSONA)
         mgr.set_persona("reviewer", REVIEWER_PERSONA)
         return mgr
-    return _get_instance("persona", _init)
+    return cast(PersonaManager, _get_instance("persona", _init))

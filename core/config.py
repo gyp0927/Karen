@@ -5,6 +5,7 @@
 """
 
 import os
+from typing import cast
 
 from dotenv import load_dotenv
 
@@ -26,7 +27,7 @@ def _get_config_value(cfg: dict | None, key: str, env_var: str = "", provider_fa
     if cfg:
         value = cfg.get(key, "")
         if value:
-            return value
+            return cast(str, value)
     if env_var:
         value = os.getenv(env_var, "")
         if value:
@@ -37,7 +38,7 @@ def _get_config_value(cfg: dict | None, key: str, env_var: str = "", provider_fa
 def get_provider() -> str:
     cfg = _get_active_config()
     if cfg:
-        return cfg.get("provider", "ollama").lower()
+        return cast(str, cfg.get("provider", "ollama")).lower()
     return os.getenv("LLM_PROVIDER", "ollama").lower()
 
 

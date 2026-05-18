@@ -71,7 +71,7 @@ class ConversationSummarizer:
             response = llm.invoke([SystemMessage(content=summary_prompt)])
             summary = response.content.strip()
             logger.info(f"Generated LLM summary, length={len(summary)}")
-            return summary
+            return cast(str, summary)
         except Exception as e:
             logger.warning(f"LLM summary failed: {e}, falling back to rule-based")
             return self._rule_based_summarize(messages)

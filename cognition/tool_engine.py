@@ -233,7 +233,7 @@ async def run_tool_loop(
         current_messages.append(response)
 
         # 并行执行所有工具调用（危险工具需用户确认）
-        tool_tasks = []
+        tool_tasks: list[Any] = []
         for tc in response.tool_calls:
             tool_name = tc.get("name", "")
             tool_args = tc.get("args", {})
@@ -248,20 +248,20 @@ async def run_tool_loop(
                             logger.warning(f"[ToolLoop] 用户拒绝执行危险工具: {tool_name}")
                             tool_tasks.append(asyncio.sleep(0))
                             # 用占位标记，后续替换为拒绝消息
-                            tool_tasks[-1]._tool_call = tc  # type: ignore[attr-defined]
-                            tool_tasks[-1]._rejected = True  # type: ignore[attr-defined]
+                            tool_tasks[-1]._tool_call = tc
+                            tool_tasks[-1]._rejected = True
                             continue
                     except Exception as e:
                         logger.warning(f"[ToolLoop] 确认回调异常，拒绝执行: {e}")
                         tool_tasks.append(asyncio.sleep(0))
-                        tool_tasks[-1]._tool_call = tc  # type: ignore[attr-defined]
-                        tool_tasks[-1]._rejected = True  # type: ignore[attr-defined]
+                        tool_tasks[-1]._tool_call = tc
+                        tool_tasks[-1]._rejected = True
                         continue
                 else:
                     logger.warning(f"[ToolLoop] 无确认处理器，拒绝执行危险工具: {tool_name}")
                     tool_tasks.append(asyncio.sleep(0))
-                    tool_tasks[-1]._tool_call = tc  # type: ignore[attr-defined]
-                    tool_tasks[-1]._rejected = True  # type: ignore[attr-defined]
+                    tool_tasks[-1]._tool_call = tc
+                    tool_tasks[-1]._rejected = True
                     continue
 
             tool_tasks.append(execute_tool_call(tc, available_tools=tools))
@@ -272,11 +272,13 @@ async def run_tool_loop(
         for i, (tc, result) in enumerate(zip(response.tool_calls, tool_results)):
             task = tool_tasks[i]
             if getattr(task, "_rejected", False):
-                result = "[工具执行被拒绝: 用户未确认执行该操作]"
-            if isinstance(result, Exception):
-                result = f"[工具执行异常: {result}]"
+                content = "[工具执行被拒绝: 用户未确认执行该操作]"
+            elif isinstance(result, Exception):
+                content = f"[工具执行异常: {result}]"
+            else:
+                content = str(result)
             current_messages.append(ToolMessage(
-                content=str(result),
+                content=content,
                 tool_call_id=tc.get("id", ""),
             ))
 

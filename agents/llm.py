@@ -6,7 +6,7 @@ import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
@@ -224,7 +224,7 @@ def get_llm(sid: str = "") -> "ChatOpenAI":
     with _llm_cache_lock:
         if cache_key in _llm_cache:
             _llm_cache.move_to_end(cache_key)
-            return _llm_cache[cache_key]
+            return cast("ChatOpenAI", _llm_cache[cache_key])
         logger.debug(f"Creating new LLM instance for model={kwargs.get('model')}")
         http_async_client = _get_http_async_client()
         if http_async_client:

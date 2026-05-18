@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+from typing import cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
@@ -167,11 +168,11 @@ class SessionManager:
 
     def get_messages(self) -> list[BaseMessage]:
         with self._lock:
-            return self._current()["messages"].copy()
+            return cast(list[BaseMessage], self._current()["messages"].copy())
 
     def get_last_n(self, n: int) -> list[BaseMessage]:
         with self._lock:
-            return self._current()["messages"][-n:]
+            return cast(list[BaseMessage], self._current()["messages"][-n:])
 
     def get_messages_for_model(self, max_turns: int = 10, llm=None) -> list[BaseMessage]:
         """获取最近 N 轮对话（用户 + AI = 一轮），用于传给 LLM。

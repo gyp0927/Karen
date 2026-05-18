@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import threading
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -256,7 +256,7 @@ class ChromaBackend(VectorStoreBackend):
         self.collection = self.client.get_or_create_collection("rag_documents")
 
     def count(self) -> int:
-        return self.collection.count()
+        return cast(int, self.collection.count())
 
     def save(self):
         pass
@@ -297,7 +297,7 @@ def _get_backend_from_config() -> str:
         if os.path.exists(_CONFIG_FILE):
             with open(_CONFIG_FILE, encoding="utf-8") as f:
                 data = json.load(f)
-            return data.get("backend", "numpy")
+            return cast(str, data.get("backend", "numpy"))
     except Exception:
         pass
     return "numpy"
@@ -354,7 +354,7 @@ def list_documents() -> list[dict]:
     """列出知识库中的所有文档（按来源分组）。"""
     store = get_vector_store()
     if hasattr(store, "list_documents"):
-        return store.list_documents()
+        return cast(list[dict], store.list_documents())
     return []
 
 
@@ -362,5 +362,5 @@ def delete_by_source(source: str) -> int:
     """删除指定来源的所有文档块。"""
     store = get_vector_store()
     if hasattr(store, "delete_by_source"):
-        return store.delete_by_source(source)
+        return cast(int, store.delete_by_source(source))
     return 0

@@ -4,6 +4,7 @@ import os
 import sqlite3
 import threading
 import time
+from typing import cast
 
 _THREAD_LOCAL = threading.local()
 # 线程本地连接最大存活时间（秒），超时后自动重建，避免连接无限累积
@@ -41,7 +42,7 @@ def get_sqlite_conn(
         ts = getattr(_THREAD_LOCAL, ts_key, 0)
         now = time.time()
         if conn is not None and (now - ts) < _CONN_MAX_AGE_S:
-            return conn
+            return cast(sqlite3.Connection, conn)
         # 连接过期或不存在：关闭旧连接（如果存在）
         if conn is not None:
             try:

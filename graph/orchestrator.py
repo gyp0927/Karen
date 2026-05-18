@@ -1,7 +1,7 @@
 import re
 from collections.abc import Sequence
 from operator import add
-from typing import Annotated, TypedDict
+from typing import Annotated, TypedDict, cast
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph import END, StateGraph
@@ -65,7 +65,7 @@ def create_coordination_graph(coordinator_agent, researcher_agent, tool_caller, 
             content = getattr(msg, "content", "")
             match = _route_pattern.search(content)
             if match:
-                return match.group(1)
+                return cast(str, match.group(1))
         # 默认走 researcher（保守策略）
         return "researcher"
 

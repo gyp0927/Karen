@@ -6,7 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -91,9 +91,9 @@ class LLMSubAgent(SubAgent):
             llm = get_llm("")
             # 用 bind 覆盖子任务参数
             if task.max_tokens is not None:
-                llm = llm.bind(max_tokens=task.max_tokens, temperature=task.temperature)
+                llm = cast(Any, llm.bind(max_tokens=task.max_tokens, temperature=task.temperature))
             else:
-                llm = llm.bind(temperature=task.temperature)
+                llm = cast(Any, llm.bind(temperature=task.temperature))
 
             messages = [
                 SystemMessage(
@@ -109,7 +109,7 @@ class LLMSubAgent(SubAgent):
             response_parts: list[str] = []
             async for chunk in llm.astream(messages):
                 if chunk.content:
-                    response_parts.append(chunk.content)
+                    response_parts.append(cast(str, chunk.content))
 
             output = "".join(response_parts)
             latency_ms = (time.time() - t0) * 1000

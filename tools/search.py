@@ -14,6 +14,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from typing import cast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ def _fetch(url: str, timeout: int = _FETCH_TIMEOUT) -> str:
         try:
             resp = _session.get(url, timeout=timeout, verify=_VERIFY_SSL)
             resp.raise_for_status()
-            return resp.text
+            return cast(str, resp.text)
         except Exception:
             pass  # 回退到 urllib
 
@@ -112,7 +113,7 @@ def _fetch(url: str, timeout: int = _FETCH_TIMEOUT) -> str:
         },
     )
     with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
-        return resp.read().decode("utf-8", errors="ignore")
+        return cast(str, resp.read().decode("utf-8", errors="ignore"))
 
 
 # ========== 缓存（带 TTL 和容量上限 + 线程安全锁） ==========
