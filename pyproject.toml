@@ -16,7 +16,7 @@ dependencies = [
     "pypdf>=4.0.0,<5.0.0",
     "requests>=2.31.0,<3.0.0",
     "ddgs>=9.0.0,<10.0.0",
-    "numpy>=1.26.0,<2.0.0",
+    "numpy>=1.26.0",
     "pydantic>=2.0.0,<3.0.0",
     "pydantic-settings>=2.0.0,<3.0.0",
     "qdrant-client>=1.10.0,<2.0.0",
@@ -53,3 +53,7 @@ strict_optional = false
 [[tool.mypy.overrides]]
 module = "hot_and_cold_memory.*"
 ignore_errors = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["data*", "tests*", "tools*", "__pycache__*"]
