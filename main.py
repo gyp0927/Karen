@@ -92,5 +92,10 @@ async def main():
             print(f"\nError: {e}\n")
 
 
-if __name__ == "__main__":
+def run_cli():
+    """同步入口，供 console_scripts 调用。"""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run_cli()
