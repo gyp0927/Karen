@@ -1,18 +1,46 @@
 import asyncio
 import logging
 import os
+import re
 
 from agents.nodes import create_agents
 from interface.human_interface import HumanInterface
 from state.manager import SessionManager
 
-# 配置控制台日志（可通过环境变量 LOG_LEVEL 调整，默认 INFO）
+# ── 日志配置：文件记录全量，控制台仅 WARNING ───────────────
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, _LOG_LEVEL, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+
+# 清除已有 handlers，防止重复
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+# 文件 handler：记录完整日志
+_file_level = getattr(logging, _LOG_LEVEL, logging.INFO)
+file_handler = logging.FileHandler(
+    os.path.join(_LOG_DIR, "karen.log"),
+    encoding="utf-8",
 )
+file_handler.setLevel(_file_level)
+file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+))
+logging.root.addHandler(file_handler)
+
+# 控制台 handler：默认只显示 WARNING+，可通过 LOG_LEVEL 环境变量调整
+_console_level = logging.WARNING
+if "LOG_LEVEL" in os.environ:
+    _console_level = _file_level
+console_handler = logging.StreamHandler()
+console_handler.setLevel(_console_level)
+console_handler.setFormatter(logging.Formatter(
+    "%(levelname)s: %(message)s",
+))
+logging.root.addHandler(console_handler)
+
+logging.root.setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # ── ANSI 颜色 ──────────────────────────────────────────────
@@ -41,6 +69,8 @@ C = {
     "lwhite": "\033[97m",
 }
 
+_ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
 
 def _c(style: str, text: str) -> str:
     """用指定样式（支持 + 连接多种样式）包裹文本。"""
@@ -52,12 +82,23 @@ def _c(style: str, text: str) -> str:
     return f"{codes}{text}{C['reset']}"
 
 
+def _visual_len(text: str) -> int:
+    """计算文本在终端中的视觉宽度（去除 ANSI 转义序列）。"""
+    return len(_ANSI_RE.sub("", text))
+
+
+def _pad_visual(text: str, width: int) -> str:
+    """按视觉宽度左对齐补齐。"""
+    pad = width - _visual_len(text)
+    return text + " " * max(pad, 0)
+
+
 def _box(lines: list[str], width: int = 50, color: str = "lcyan") -> str:
     """用 Unicode 单线框包裹多行文本。"""
     out = []
     out.append(_c(color, "┌" + "─" * (width - 2) + "┐"))
     for line in lines:
-        pad = width - 2 - len(line)
+        pad = width - 2 - _visual_len(line)
         out.append(_c(color, "│") + line + " " * max(pad, 0) + _c(color, "│"))
     out.append(_c(color, "└" + "─" * (width - 2) + "┘"))
     return "\n".join(out)
@@ -69,22 +110,30 @@ def _separator(char: str = "─", width: int = 50, color: str = "dim") -> str:
 
 # ── 像素头像（ANSI 256 色背景）─────────────────────────────
 _AVATAR_BG = {
-    "h": "\033[48;5;130m",  # 头发-棕色
-    "s": "\033[48;5;223m",  # 肤色-桃色
-    "e": "\033[48;5;16m",   # 眼睛-黑
-    "w": "\033[48;5;15m",   # 眼睛高光-白
+    "H": "\033[48;5;52m",   # 头发轮廓-深红棕
+    "h": "\033[48;5;130m",  # 头发主体-棕色
+    "r": "\033[48;5;196m",  # 发饰-红色
+    "s": "\033[48;5;224m",  # 肤色-自然
+    "p": "\033[48;5;217m",  # 腮红-粉色
+    "e": "\033[48;5;16m",   # 瞳孔-黑
+    "w": "\033[48;5;15m",   # 高光-白
     "m": "\033[48;5;204m",  # 嘴巴-玫红
+    "c": "\033[48;5;183m",  # 衣服-淡紫
 }
 
 _AVATAR_PIXELS = [
-    [" ", " ", " ", " ", " ", " ", "h", "h", "h", "h", "h", "h", " ", " "],
-    [" ", " ", " ", " ", "h", "h", "s", "s", "s", "s", "s", "s", "h", "h"],
-    [" ", " ", " ", "h", "s", "s", "s", "s", "s", "s", "s", "s", "s", "h"],
-    [" ", " ", "h", "s", "s", "s", "s", "s", "s", "s", "s", "s", "s", "s"],
-    [" ", " ", "h", "s", "s", "e", "w", "s", "s", "e", "w", "s", "s", "h"],
-    [" ", " ", "h", "s", "s", "s", "s", "s", "s", "s", "s", "s", "s", "h"],
-    [" ", " ", "h", "s", "s", "s", "s", "m", "m", "s", "s", "s", "s", "h"],
-    [" ", " ", " ", "h", "h", "s", "s", "s", "s", "s", "s", "h", "h", " "],
+    [" ", " ", " ", " ", " ", " ", "H", "H", "H", "H", "H", "H", " ", " ", " ", " ", " ", " "],
+    [" ", " ", " ", " ", "H", "H", "h", "h", "h", "h", "h", "h", "H", "H", " ", " ", " ", " "],
+    [" ", " ", " ", "H", "h", "h", "r", "s", "s", "s", "s", "r", "h", "h", "H", " ", " ", " "],
+    [" ", " ", "H", "h", "s", "s", "e", "w", "s", "s", "e", "w", "s", "s", "h", "H", " ", " "],
+    [" ", " ", "h", "h", "s", "p", "s", "s", "s", "s", "s", "s", "p", "s", "h", "h", " ", " "],
+    [" ", " ", "h", "s", "s", "s", "s", "s", "s", "m", "m", "s", "s", "s", "s", "s", "h", " "],
+    [" ", " ", " ", "h", "h", "s", "s", "s", "s", "s", "s", "s", "s", "h", "h", " ", " ", " "],
+    [" ", " ", " ", " ", "h", "h", "h", "s", "s", "s", "s", "h", "h", "h", " ", " ", " ", " "],
+    [" ", " ", " ", " ", " ", "c", "c", "c", "c", "c", "c", "c", "c", " ", " ", " ", " ", " "],
+    [" ", " ", " ", " ", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", " ", " ", " ", " "],
+    [" ", " ", " ", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", " ", " ", " "],
+    [" ", " ", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", " ", " "],
 ]
 
 
@@ -100,6 +149,8 @@ def _render_avatar_row(pixels: list[str]) -> str:
             out += "  "
         else:
             color = _AVATAR_BG.get(p)
+            if color is None:
+                color = C["reset"]
             if color != current:
                 out += color
                 current = color
@@ -112,36 +163,39 @@ def _render_avatar_row(pixels: list[str]) -> str:
 async def main():
     # ── 启动画面（头像 + 标题并排）──────────────────────────
     avatar_lines = [_render_avatar_row(row) for row in _AVATAR_PIXELS]
-    # 标题区域 28 显示宽度，8 行与头像对齐
-    _T = " " * 28
+    # 标题区域 24 字符宽度，12 行与头像对齐
+    _T = " " * 24
     titles = [
         _T,
-        _c("bold+lcyan", "        ✦  凯 伦  ✦        "),
+        _c("bold+lcyan", "    ✦  凯 伦  ✦        "),
         _T,
-        _c("dim", "      输入消息开始对话      "),
+        _c("dim", "  输入消息开始对话      "),
         _T,
-        _c("dim", "    exit退出 /review审查    "),
-        _c("dim", "    /fast模式 /clear清空    "),
+        _c("dim", "  exit    退出对话      "),
+        _c("dim", "  /review 审查开关      "),
+        _c("dim", "  /fast   模式切换      "),
+        _c("dim", "  /clear  清空历史      "),
+        _T,
+        _T,
         _T,
     ]
+    # 补齐标题到统一视觉宽度
+    titles = [_pad_visual(t, 24) for t in titles]
 
+    # 单线框，总宽 64（头像36 + 间距2 + 标题24 + 边框2）
+    _W = 62
     print()
-    print(_c("bold+lmagenta", "╔" + "═" * 58 + "╗"))
-    for i in range(8):
-        print(_c("bold+lmagenta", "║") + avatar_lines[i] + "  " + titles[i] + _c("bold+lmagenta", "║"))
-    print(_c("bold+lmagenta", "╚" + "═" * 58 + "╝"))
+    print(_c("bold+lmagenta", "╭" + "─" * _W + "╮"))
+    for i in range(12):
+        line = avatar_lines[i] + "  " + titles[i]
+        pad = _W - _visual_len(line)
+        print(_c("bold+lmagenta", "│") + line + " " * max(pad, 0) + _c("bold+lmagenta", "│"))
+    print(_c("bold+lmagenta", "╰" + "─" * _W + "╯"))
     print()
 
-    print(_c("dim", "  正在初始化智能体..."))
-
-    # 创建 Agents
+    # 静默初始化（不再打印初始化信息，日志写入文件）
     coordinator, researcher, responder, reviewer = create_agents()
-    print(_c("lgreen", "  ✓ 智能体初始化完成"))
-
-    # 初始化消息管理器
     msg_manager = SessionManager()
-
-    # 创建用户接口（启用协调模式 + 审查）
     interface = HumanInterface(
         message_manager=msg_manager,
         coordinator=coordinator,
