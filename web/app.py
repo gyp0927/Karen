@@ -1131,8 +1131,12 @@ def handle_get_model_info():
         else:
             from core.config import get_model_name, get_provider
 
-            provider = get_provider()
-            model = get_model_name()
+            try:
+                provider = get_provider()
+                model = get_model_name()
+            except Exception:
+                provider = "ollama"
+                model = "llama3.2"
             name = ""
             server_has_config = False
     emit(
