@@ -923,7 +923,9 @@ def handle_confirm_tool_execution(data):
         pending["result"]["confirmed"] = confirmed
         pending["event"].set()
         emit("tool_confirmation_ack", {"confirm_id": confirm_id, "confirmed": confirmed})
-        logger.info(f"[ToolConfirm] 用户{'确认' if confirmed else '拒绝'}执行工具: {pending.get('tool_name')} for sid={sid}")
+        logger.info(
+            f"[ToolConfirm] 用户{'确认' if confirmed else '拒绝'}执行工具: {pending.get('tool_name')} for sid={sid}"
+        )
     else:
         emit("error", {"message": "确认请求已过期或无效"})
         logger.warning(f"[ToolConfirm] 无效或已过期的确认请求: confirm_id={confirm_id} sid={sid}")
