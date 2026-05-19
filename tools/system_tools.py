@@ -109,6 +109,19 @@ def _is_command_safe(command: str) -> tuple[bool, str]:
     if cmd_name not in _SAFE_COMMAND_PREFIXES:
         return False, f"命令 '{cmd_name}' 不在允许列表中"
 
+    # 解释器类命令的参数安全检查：
+    # 禁止通过 -c / -e / -exec 等参数执行任意代码
+    _DANGEROUS_ARGS = {"-c", "-e", "-exec", "--exec", "-eval", "-execdir", "--execdir"}
+    # 可以执行代码的解释器
+    _INTERPRETER_CMDS = {"python", "python3", "node", "npm", "npx", "rustc", "cargo", "go", "javac", "java"}
+    # find 的 -exec 也能执行任意命令
+    _FIND_CMD = {"find"}
+    if cmd_name in _INTERPRETER_CMDS | _FIND_CMD:
+        tokens = cmd.split()
+        for token in tokens[1:]:
+            if token in _DANGEROUS_ARGS:
+                return False, f"命令禁止使用参数 '{token}' 执行内联代码"
+
     return True, ""
 
 
