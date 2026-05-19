@@ -214,6 +214,104 @@ async def _thinking_spinner(stop_event: asyncio.Event, interval: float = 0.3):
     print(f"\r{' ' * 40}\r", end="", flush=True)
 
 
+# ── 智能输入：输入 / 自动弹出命令帮助 ───────────────────────
+_HELP_AUTO_SHOWN = False  # 由 _smart_input 自动弹出帮助时置 True，供主循环去重
+
+
+def _getch() -> str:
+    """读取单个字符（不回显，不需要回车）。空串表示忽略（如箭头键）。"""
+    if sys.platform == "win32":
+        import msvcrt
+        ch = msvcrt.getwch()
+        # Windows 特殊键(箭头/F键)返回 \x00 或 \xe0 + 第二个字符
+        if ch in ("\x00", "\xe0"):
+            msvcrt.getwch()
+            return ""
+        return ch
+    else:
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        # ESC 序列(箭头等)简化处理:忽略
+        if ch == "\x1b":
+            return ""
+        return ch
+
+
+def _print_help_box():
+    """打印可用命令帮助框（不含前后空行）。"""
+    header = " 可用命令 "
+    header_v = _visual_len(header)
+    left = (_MSG_W - 2 - header_v) // 2
+    right = _MSG_W - 2 - header_v - left
+    print(_c("lcyan", "┌" + "─" * left) + _c("bold+lcyan", header) + _c("lcyan", "─" * right + "┐"))
+    cmds = [
+        ("  exit    ", "退出对话"),
+        ("  /review ", "审查模式开关"),
+        ("  /fast   ", "快速/协调模式切换"),
+        ("  /clear  ", "清空对话历史"),
+        ("  /history", "查看对话历史"),
+        ("  /help   ", "显示此帮助"),
+    ]
+    for name, desc in cmds:
+        line = f"{_c('yellow', name)}  {desc}"
+        plain = f"{name}  {desc}"
+        chunk, _rest = _split_visual(line, _MSG_W - 2)
+        pad = _MSG_W - 2 - _visual_len(plain)
+        print(_c("lcyan", "│") + chunk + " " * max(pad, 0) + _c("lcyan", "│"))
+    print(_c("lcyan", "└" + "─" * (_MSG_W - 2) + "┘"))
+
+
+def _smart_input(prompt: str) -> str:
+    """智能输入：第一个字符输入 / 时自动弹出命令帮助。
+
+    逐字符读取并立即回显，支持 Enter 提交、Backspace 删除、Ctrl+C 中断。
+    """
+    global _HELP_AUTO_SHOWN
+    _HELP_AUTO_SHOWN = False
+
+    print(prompt, end="", flush=True)
+    buffer = ""
+    help_shown = False
+    while True:
+        ch = _getch()
+        # 回车 -> 提交
+        if ch in ("\r", "\n"):
+            print()
+            return buffer
+        # Ctrl+C -> 中断
+        if ch == "\x03":
+            print()
+            raise KeyboardInterrupt
+        # Backspace（Windows: \b, Unix: DEL=\x7f）
+        if ch in ("\b", "\x7f"):
+            if buffer:
+                last = buffer[-1]
+                buffer = buffer[:-1]
+                w = _visual_len(last)
+                print("\b" * w + " " * w + "\b" * w, end="", flush=True)
+            continue
+        # 忽略空串(特殊键)和其他控制字符
+        if not ch or (len(ch) == 1 and ord(ch) < 32):
+            continue
+        # 普通字符：加入 buffer 并回显
+        buffer += ch
+        print(ch, end="", flush=True)
+        # 第一个字符是 / -> 自动弹出帮助
+        if len(buffer) == 1 and ch == "/" and not help_shown:
+            print()
+            _print_help_box()
+            print(prompt + buffer, end="", flush=True)
+            help_shown = True
+            _HELP_AUTO_SHOWN = True
+
+
 def _render_status_bar(model: str, used_tokens: int, elapsed_sec: int) -> str:
     """渲染终端状态栏：$ 模型名 | 用量/上限 [进度条] 百分比 | 时间"""
     # token 格式化
@@ -303,7 +401,7 @@ async def main():
         try:
             # ── 用户输入 ────────────────────────────────────
             print()
-            user_input = input(_c("yellow", "● ")).strip()
+            user_input = _smart_input(_c("yellow", "● ")).strip()
             if not user_input:
                 continue
 
@@ -346,28 +444,11 @@ async def main():
                 print()
                 continue
             elif user_input.lower() in ("/", "/help"):
-                print()
-                header = " 可用命令 "
-                header_v = _visual_len(header)
-                left = (_MSG_W - 2 - header_v) // 2
-                right = _MSG_W - 2 - header_v - left
-                print(_c("lcyan", "┌" + "─" * left) + _c("bold+lcyan", header) + _c("lcyan", "─" * right + "┐"))
-                cmds = [
-                    ("  exit    ", "退出对话"),
-                    ("  /review ", "审查模式开关"),
-                    ("  /fast   ", "快速/协调模式切换"),
-                    ("  /clear  ", "清空对话历史"),
-                    ("  /history", "查看对话历史"),
-                    ("  /help   ", "显示此帮助"),
-                ]
-                for name, desc in cmds:
-                    line = f"{_c('yellow', name)}  {desc}"
-                    plain = f"{name}  {desc}"
-                    chunk, _ = _split_visual(line, _MSG_W - 2)
-                    pad = _MSG_W - 2 - _visual_len(plain)
-                    print(_c("lcyan", "│") + chunk + " " * max(pad, 0) + _c("lcyan", "│"))
-                print(_c("lcyan", "└" + "─" * (_MSG_W - 2) + "┘"))
-                print()
+                # 若 _smart_input 已自动弹出，则不再重复显示
+                if not _HELP_AUTO_SHOWN:
+                    print()
+                    _print_help_box()
+                    print()
                 continue
 
             # ── AI 回复 ─────────────────────────────────────
