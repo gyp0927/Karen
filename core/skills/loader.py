@@ -98,7 +98,7 @@ class SkillLoader:
         required = ["name", "description", "triggers", "category"]
         missing = [f for f in required if not meta.get(f)]
         if missing:
-            logger.warning(f"Skill {path} missing required fields: {missing}")
+            logger.debug(f"Skill {path} missing required fields: {missing}")
             return None
 
         # 标准化 triggers 为列表

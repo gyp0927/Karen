@@ -93,7 +93,7 @@ def _pad_visual(text: str, width: int) -> str:
     return text + " " * max(pad, 0)
 
 
-def _box(lines: list[str], width: int = 50, color: str = "lcyan") -> str:
+def _box(lines: list[str], width: int = 80, color: str = "lcyan") -> str:
     """用 Unicode 单线框包裹多行文本。"""
     out = []
     out.append(_c(color, "┌" + "─" * (width - 2) + "┐"))
@@ -104,32 +104,36 @@ def _box(lines: list[str], width: int = 50, color: str = "lcyan") -> str:
     return "\n".join(out)
 
 
-def _separator(char: str = "─", width: int = 50, color: str = "dim") -> str:
+def _separator(char: str = "─", width: int = 80, color: str = "dim") -> str:
     return _c(color, char * width)
 
 
 # ── 像素头像（ANSI 256 色背景）─────────────────────────────
+# 基于粉色短发少女形象：亮粉头发 + 红色发带 + 紫红瞳孔 + 淡蓝衣服
 _AVATAR_BG = {
-    "H": "\033[48;5;52m",   # 头发轮廓-深红棕
-    "h": "\033[48;5;130m",  # 头发主体-棕色
-    "r": "\033[48;5;196m",  # 发饰-红色
-    "s": "\033[48;5;224m",  # 肤色-自然
-    "p": "\033[48;5;217m",  # 腮红-粉色
-    "e": "\033[48;5;16m",   # 瞳孔-黑
-    "w": "\033[48;5;15m",   # 高光-白
-    "m": "\033[48;5;204m",  # 嘴巴-玫红
-    "c": "\033[48;5;183m",  # 衣服-淡紫
+    "H": "\033[48;5;219m",  # 亮粉-头发高光
+    "h": "\033[48;5;212m",  # 中粉-头发主体
+    "d": "\033[48;5;168m",  # 深粉-头发阴影/轮廓
+    "r": "\033[48;5;196m",  # 红-发带
+    "s": "\033[48;5;224m",  # 肤色
+    "p": "\033[48;5;217m",  # 粉-腮红
+    "e": "\033[48;5;201m",  # 紫红-瞳孔
+    "w": "\033[48;5;15m",   # 白-高光
+    "m": "\033[48;5;204m",  # 玫红-嘴巴
+    "c": "\033[48;5;195m",  # 淡蓝-衣服
 }
 
 _AVATAR_PIXELS = [
-    [" ", " ", " ", " ", " ", " ", "H", "H", "H", "H", "H", "H", " ", " ", " ", " ", " ", " "],
-    [" ", " ", " ", " ", "H", "H", "h", "h", "h", "h", "h", "h", "H", "H", " ", " ", " ", " "],
-    [" ", " ", " ", "H", "h", "h", "r", "s", "s", "s", "s", "r", "h", "h", "H", " ", " ", " "],
-    [" ", " ", "H", "h", "s", "s", "e", "w", "s", "s", "e", "w", "s", "s", "h", "H", " ", " "],
-    [" ", " ", "h", "h", "s", "p", "s", "s", "s", "s", "s", "s", "p", "s", "h", "h", " ", " "],
-    [" ", " ", "h", "s", "s", "s", "s", "s", "s", "m", "m", "s", "s", "s", "s", "s", "h", " "],
-    [" ", " ", " ", "h", "h", "s", "s", "s", "s", "s", "s", "s", "s", "h", "h", " ", " ", " "],
-    [" ", " ", " ", " ", "h", "h", "h", "s", "s", "s", "s", "h", "h", "h", " ", " ", " ", " "],
+    [" ", " ", " ", " ", " ", " ", "h", "h", "h", "h", "h", "h", " ", " ", " ", " ", " ", " "],
+    [" ", " ", " ", " ", "h", "h", "H", "H", "H", "H", "H", "H", "h", "h", " ", " ", " ", " "],
+    [" ", " ", " ", "d", "H", "h", "h", "s", "s", "s", "s", "h", "h", "H", "d", " ", " ", " "],
+    [" ", "d", "H", "h", "s", "s", "e", "w", "s", "s", "e", "w", "s", "s", "h", "H", "d", " "],
+    [" ", "d", "H", "s", "p", "s", "s", "s", "s", "s", "s", "s", "p", "s", "s", "H", "d", " "],
+    ["d", "h", "s", "s", "s", "s", "s", "s", "m", "m", "s", "s", "s", "s", "s", "s", "h", "d"],
+    [" ", "d", "h", "r", "s", "s", "s", "s", "s", "s", "s", "s", "s", "s", "r", "h", "d", " "],
+    [" ", " ", "d", "h", "r", "s", "s", "s", "s", "s", "s", "s", "s", "r", "h", "d", " ", " "],
+    [" ", " ", " ", "d", "h", "h", "s", "s", "s", "s", "h", "h", "d", " ", " ", " ", " ", " "],
+    [" ", " ", " ", " ", " ", "r", "r", "r", "r", "r", "r", " ", " ", " ", " ", " ", " ", " "],
     [" ", " ", " ", " ", " ", "c", "c", "c", "c", "c", "c", "c", "c", " ", " ", " ", " ", " "],
     [" ", " ", " ", " ", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", " ", " ", " ", " "],
     [" ", " ", " ", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", " ", " ", " "],
@@ -238,30 +242,36 @@ async def main():
             elif user_input.lower() == "/history":
                 history = msg_manager.get_messages()
                 print()
-                print(_c("lcyan", "┌─ 历史记录 ") + _c("dim", f"({len(history)} 条) ") + _c("dim", "─" * 28 + "┐"))
+                header = f" 历史记录 ({len(history)} 条) "
+                header_width = _visual_len(header)
+                left_dash = (78 - header_width) // 2
+                right_dash = 78 - header_width - left_dash
+                print(_c("lcyan", "┌" + "─" * left_dash) + _c("bold+lcyan", header) + _c("lcyan", "─" * right_dash + "┐"))
                 for msg in history:
                     sender = getattr(msg, "name", "unknown")
                     content = msg.content[:60].replace("\n", " ")
-                    pad = 40 - len(sender) - len(content)
-                    line = f"  [{sender}]: {content}..."
-                    print(_c("lcyan", "│") + line + " " * max(48 - len(line), 0) + _c("lcyan", "│"))
-                print(_c("lcyan", "└" + "─" * 48 + "┘"))
+                    line = f"  [{sender}]: {content}"
+                    if len(line) > 76:
+                        line = line[:73] + "..."
+                    padded = _pad_visual(line, 78)
+                    print(_c("lcyan", "│") + padded + _c("lcyan", "│"))
+                print(_c("lcyan", "└" + "─" * 78 + "┘"))
                 print()
                 continue
 
             # ── AI 回复 ─────────────────────────────────────
             response = await interface.send_message(user_input)
             print()
-            print(_c("bold+lcyan", "╭─ Assistant ") + _c("dim", "─" * 37 + "╮"))
+            print(_c("bold+lcyan", "╭─ Assistant ") + _c("dim", "─" * 66 + "╮"))
             # 多行回复逐行打印，保持框线对齐
             for line in response.split("\n"):
-                # 逐行处理，每行最多 46 个字符（留边距）
+                # 逐行处理，每行最多 76 个字符（留边距）
                 while line:
-                    chunk = line[:46] if len(line) > 46 else line
-                    line = line[46:] if len(line) > 46 else ""
-                    pad = 46 - len(chunk)
+                    chunk = line[:76] if len(line) > 76 else line
+                    line = line[76:] if len(line) > 76 else ""
+                    pad = 76 - len(chunk)
                     print(_c("lcyan", "│ ") + chunk + " " * pad + _c("lcyan", " │"))
-            print(_c("lcyan", "╰" + "─" * 48 + "╯"))
+            print(_c("lcyan", "╰" + "─" * 78 + "╯"))
             print()
 
         except KeyboardInterrupt:
