@@ -448,6 +448,12 @@ class ModelRouter:
 
         config = self.get_tier_config(tier)
 
+        # 如果 powerful 档没有有效 apiKey（配置为空且环境变量也未设置），降级到 default
+        if tier == "powerful" and not config.get("apiKey"):
+            logger.info("Powerful tier apiKey not configured, falling back to default.")
+            tier = "default"
+            config = self.get_tier_config(tier)
+
         logger.info(f"Model routing: tier={tier}, score={analysis['score']}")
 
         return {
