@@ -396,7 +396,7 @@ def _render_status_bar(model: str, used_tokens: int, elapsed_sec: int) -> str:
     if "kimi" in model_lower:
         max_tokens = 260000
     else:
-        max_tokens = 128000
+        max_tokens = 256000
     max_str = f"{max_tokens / 1000:.0f}K"
 
     # 进度条
