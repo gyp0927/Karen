@@ -38,8 +38,9 @@ file_handler.setFormatter(logging.Formatter(
 ))
 logging.root.addHandler(file_handler)
 
-# 控制台 handler：默认只显示 WARNING+，可通过 LOG_LEVEL 环境变量调整
-_console_level = logging.WARNING
+# 控制台 handler：默认只显示 ERROR+，避免搜索/网络警告破坏终端界面
+# 可通过 LOG_LEVEL 环境变量调整
+_console_level = logging.ERROR
 if "LOG_LEVEL" in os.environ:
     _console_level = _file_level
 console_handler = logging.StreamHandler()
