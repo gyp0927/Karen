@@ -83,33 +83,50 @@ def _c(style: str, text: str) -> str:
 
 
 def _visual_len(text: str) -> int:
-    """计算文本在终端中的视觉宽度（去除 ANSI 转义序列）。"""
-    return len(_ANSI_RE.sub("", text))
+    """计算文本在终端中的视觉宽度（去除 ANSI 转义序列 + CJK 双宽）。"""
+    text = _ANSI_RE.sub("", text)
+    width = 0
+    for ch in text:
+        o = ord(ch)
+        # CJK Unified Ideographs + Extension A
+        if 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF:
+            width += 2
+        # Fullwidth ASCII + CJK symbols
+        elif 0xFF01 <= o <= 0xFF60 or 0xFFE0 <= o <= 0xFFE6 or 0x3000 <= o <= 0x303F:
+            width += 2
+        # Hangul
+        elif 0xAC00 <= o <= 0xD7AF or 0x1100 <= o <= 0x11FF or 0x3130 <= o <= 0x318F:
+            width += 2
+        else:
+            width += 1
+    return width
 
 
-def _pad_visual(text: str, width: int) -> str:
-    """按视觉宽度左对齐补齐。"""
-    pad = width - _visual_len(text)
-    return text + " " * max(pad, 0)
+def _split_visual(text: str, max_width: int) -> tuple[str, str]:
+    """按视觉宽度分割文本为 (chunk, remaining)。"""
+    width = 0
+    for i, ch in enumerate(text):
+        o = ord(ch)
+        w = 2 if (
+            0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF
+            or 0xFF01 <= o <= 0xFF60 or 0xFFE0 <= o <= 0xFFE6
+            or 0x3000 <= o <= 0x303F or 0xAC00 <= o <= 0xD7AF
+            or 0x1100 <= o <= 0x11FF or 0x3130 <= o <= 0x318F
+        ) else 1
+        if width + w > max_width:
+            return text[:i], text[i:]
+        width += w
+    return text, ""
 
 
-def _box(lines: list[str], width: int = 80, color: str = "lcyan") -> str:
-    """用 Unicode 单线框包裹多行文本。"""
-    out = []
-    out.append(_c(color, "┌" + "─" * (width - 2) + "┐"))
-    for line in lines:
-        pad = width - 2 - _visual_len(line)
-        out.append(_c(color, "│") + line + " " * max(pad, 0) + _c(color, "│"))
-    out.append(_c(color, "└" + "─" * (width - 2) + "┘"))
-    return "\n".join(out)
-
-
-def _separator(char: str = "─", width: int = 80, color: str = "dim") -> str:
-    return _c(color, char * width)
-
+# ── 终端宽度 ────────────────────────────────────────────────
+try:
+    _TERM_W = os.get_terminal_size().columns
+except OSError:
+    _TERM_W = 100
+_MSG_W = max(min(_TERM_W - 2, 120), 64)  # 留边距，最小 64 最大 120
 
 # ── 像素头像（ANSI 256 色背景）─────────────────────────────
-# 基于粉色短发少女形象：亮粉头发 + 红色发带 + 紫红瞳孔 + 淡蓝衣服
 _AVATAR_BG = {
     "H": "\033[48;5;219m",  # 亮粉-头发高光
     "h": "\033[48;5;212m",  # 中粉-头发主体
@@ -167,7 +184,6 @@ def _render_avatar_row(pixels: list[str]) -> str:
 async def main():
     # ── 启动画面（头像 + 标题并排）──────────────────────────
     avatar_lines = [_render_avatar_row(row) for row in _AVATAR_PIXELS]
-    # 标题区域 24 字符宽度，12 行与头像对齐
     _T = " " * 24
     titles = [
         _T,
@@ -183,21 +199,18 @@ async def main():
         _T,
         _T,
     ]
-    # 补齐标题到统一视觉宽度
-    titles = [_pad_visual(t, 24) for t in titles]
-
-    # 单线框，总宽 64（头像36 + 间距2 + 标题24 + 边框2）
-    _W = 62
+    # 启动框固定 64 宽（与终端无关）
+    _BOOT_W = 62
     print()
-    print(_c("bold+lmagenta", "╭" + "─" * _W + "╮"))
+    print(_c("bold+lmagenta", "╭" + "─" * _BOOT_W + "╮"))
     for i in range(12):
         line = avatar_lines[i] + "  " + titles[i]
-        pad = _W - _visual_len(line)
+        pad = _BOOT_W - _visual_len(line)
         print(_c("bold+lmagenta", "│") + line + " " * max(pad, 0) + _c("bold+lmagenta", "│"))
-    print(_c("bold+lmagenta", "╰" + "─" * _W + "╯"))
+    print(_c("bold+lmagenta", "╰" + "─" * _BOOT_W + "╯"))
     print()
 
-    # 静默初始化（不再打印初始化信息，日志写入文件）
+    # 静默初始化
     coordinator, researcher, responder, reviewer = create_agents()
     msg_manager = SessionManager()
     interface = HumanInterface(
@@ -214,8 +227,9 @@ async def main():
     # 对话循环
     while True:
         try:
-            # ── 用户输入提示 ─────────────────────────────────
-            user_input = input(_c("bold+lgreen", "💬 ") + _c("bold+lwhite", "You") + _c("dim", " ───> ")).strip()
+            # ── 用户输入 ────────────────────────────────────
+            print()
+            user_input = input(_c("yellow", "● ")).strip()
             if not user_input:
                 continue
 
@@ -243,36 +257,42 @@ async def main():
                 history = msg_manager.get_messages()
                 print()
                 header = f" 历史记录 ({len(history)} 条) "
-                header_width = _visual_len(header)
-                left_dash = (78 - header_width) // 2
-                right_dash = 78 - header_width - left_dash
-                print(_c("lcyan", "┌" + "─" * left_dash) + _c("bold+lcyan", header) + _c("lcyan", "─" * right_dash + "┐"))
+                header_v = _visual_len(header)
+                left = (_MSG_W - 2 - header_v) // 2
+                right = _MSG_W - 2 - header_v - left
+                print(_c("lcyan", "┌" + "─" * left) + _c("bold+lcyan", header) + _c("lcyan", "─" * right + "┐"))
                 for msg in history:
                     sender = getattr(msg, "name", "unknown")
                     content = msg.content[:60].replace("\n", " ")
                     line = f"  [{sender}]: {content}"
-                    if len(line) > 76:
-                        line = line[:73] + "..."
-                    padded = _pad_visual(line, 78)
-                    print(_c("lcyan", "│") + padded + _c("lcyan", "│"))
-                print(_c("lcyan", "└" + "─" * 78 + "┘"))
+                    chunk, _ = _split_visual(line, _MSG_W - 2)
+                    pad = _MSG_W - 2 - _visual_len(chunk)
+                    print(_c("lcyan", "│") + chunk + " " * max(pad, 0) + _c("lcyan", "│"))
+                print(_c("lcyan", "└" + "─" * (_MSG_W - 2) + "┘"))
                 print()
                 continue
 
             # ── AI 回复 ─────────────────────────────────────
             response = await interface.send_message(user_input)
-            print()
-            print(_c("bold+lcyan", "╭─ Assistant ") + _c("dim", "─" * 66 + "╮"))
-            # 多行回复逐行打印，保持框线对齐
+
+            # 分隔线
+            print(_c("dim", "─" * _MSG_W))
+
+            # 全宽回复框
+            label = _c("bold+lcyan", "🧠 Karen")
+            label_plain = "🧠 Karen"
+            label_v = _visual_len(label_plain)
+            top_dash = _MSG_W - 6 - label_v  # ╭─  + 标签 + 空格 + ╮
+            print(_c("lcyan", "╭─ ") + label + _c("lcyan", " " + "─" * top_dash + "╮"))
+
+            content_w = _MSG_W - 4  # │ 内容 │
             for line in response.split("\n"):
-                # 逐行处理，每行最多 76 个字符（留边距）
                 while line:
-                    chunk = line[:76] if len(line) > 76 else line
-                    line = line[76:] if len(line) > 76 else ""
-                    pad = 76 - len(chunk)
-                    print(_c("lcyan", "│ ") + chunk + " " * pad + _c("lcyan", " │"))
-            print(_c("lcyan", "╰" + "─" * 78 + "╯"))
-            print()
+                    chunk, line = _split_visual(line, content_w)
+                    pad = content_w - _visual_len(chunk)
+                    print(_c("lcyan", "│ ") + chunk + " " * max(pad, 0) + _c("lcyan", " │"))
+
+            print(_c("lcyan", "╰" + "─" * (_MSG_W - 2) + "╯"))
 
         except KeyboardInterrupt:
             print()

@@ -114,7 +114,7 @@ class TestSkillLoader:
 
         import logging
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG):
             loader = SkillLoader(skills_dir=tmp_path)
 
         assert loader.get("bad-skill") is None
