@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -269,11 +270,11 @@ async def search_files(pattern: str, directory: str = "", max_results: int = 20)
         return f"[错误: 不是目录: {p}]"
 
     try:
-        results = []
+        results: list[str] = []
         # 限制搜索深度为 5 层，避免遍历整个 HOME 目录过慢
         max_depth = 5
 
-        def _search_recursive(current: Path, depth: int):
+        def _search_recursive(current: Path, depth: int) -> None:
             if depth > max_depth or len(results) >= max_results:
                 return
             try:
@@ -387,8 +388,8 @@ async def apply_patch(path: str, patch: str) -> str:
     lines = content.split("\n")
 
     # 解析 patch
-    hunks = []
-    current_hunk = None
+    hunks: list[dict[str, Any]] = []
+    current_hunk: dict[str, Any] | None = None
     patch_lines = patch.split("\n")
     i = 0
     while i < len(patch_lines):
