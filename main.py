@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import warnings
 
 # Windows cmd.exe 默认不解析 ANSI 转义序列，需先启用 VT100 模式
@@ -243,6 +244,24 @@ async def _do_compact(msg_manager: SessionManager) -> str | None:
 
     _COMPACT_COUNT += 1
     return summary
+
+
+def _estimate_tokens(text: str) -> int:
+    """粗估 token 数。中文字符 ≈1 token/字, 英文 ≈1 token/4 字符。"""
+    if not text:
+        return 0
+    chinese_chars = sum(1 for c in text if unicodedata.category(c) == "Lo")
+    non_chinese = len(text) - chinese_chars
+    return max(1, chinese_chars + non_chinese // 4)
+
+
+def _get_context_usage(msg_manager: SessionManager) -> int:
+    """估算当前会话上下文窗口占用（历史消息 + 系统提示固定开销）。"""
+    messages = msg_manager.get_messages()
+    history_tokens = sum(_estimate_tokens(getattr(m, "content", "") or "") for m in messages)
+    # 系统提示 + 日期 + cognition 等固定开销（经验值，各模型相近）
+    system_overhead = 800
+    return history_tokens + system_overhead
 
 
 async def _thinking_spinner(stop_event: asyncio.Event, interval: float = 0.3):
@@ -559,20 +578,21 @@ async def main():
 
             print(_c("lcyan", "╰" + "─" * (_MSG_W - 2) + "╯"))
 
-            # 状态栏
+            # 状态栏（从会话历史消息估算上下文占用，避免 API 临时注入导致波动）
             sid = msg_manager.get_current_session_id()
             from state.stats import get_session_stats
             session_stats = get_session_stats(sid)
             elapsed = int(time.time() - session_start_time)
+            context_usage = _get_context_usage(msg_manager)
             status_line = _render_status_bar(
                 session_stats.get("last_model") or model_name,
-                session_stats.get("last_prompt_tokens", 0),
+                context_usage,
                 elapsed,
             )
             print(status_line)
 
             # 自动压缩：上下文用量达到 60% 且未超过 2 次时触发
-            last_prompt = session_stats.get("last_prompt_tokens", 0)
+            last_prompt = context_usage
             last_model = session_stats.get("last_model") or model_name
             max_tok = 260000 if "kimi" in last_model.lower() else 128000
             if last_prompt / max_tok >= 0.6 and _COMPACT_COUNT < 2:
