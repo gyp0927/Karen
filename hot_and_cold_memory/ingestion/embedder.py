@@ -130,45 +130,26 @@ class Embedder:
         _MODEL_LOAD_TIMEOUT = 120.0
 
         def _load():
+            # torch 2.11 + transformers 4.57 组合下，低内存环境可能默认启用
+            # low_cpu_mem_usage（lazy-loading），导致参数为 meta tensor；随后
+            # SentenceTransformer 调用 self.to(device) 时抛出 NotImplementedError。
+            # 临时 patch AutoModel.from_pretrained 禁用该行为。
+            import transformers
+
+            _orig_from_pretrained = transformers.AutoModel.from_pretrained
+
+            def _patched_from_pretrained(model_name, **kwargs):
+                kwargs.setdefault("low_cpu_mem_usage", False)
+                return _orig_from_pretrained(model_name, **kwargs)
+
+            transformers.AutoModel.from_pretrained = _patched_from_pretrained
             try:
                 return SentenceTransformer(
                     self.settings.LOCAL_EMBEDDING_MODEL,
                     device=self.settings.LOCAL_EMBEDDING_DEVICE,
                 )
-            except NotImplementedError as e:
-                if "meta tensor" in str(e).lower():
-                    logger.warning(
-                        "meta_tensor_fallback",
-                        device=self.settings.LOCAL_EMBEDDING_DEVICE,
-                        error=str(e),
-                    )
-                    # 某些 torch 版本 + accelerate 组合会创建 meta tensor 参数，
-                    # 导致 self.to(device) 时失败。通过临时禁用 init_empty_weights
-                    # 让 transformers 走常规加载路径（非 lazy-loading）。
-                    try:
-                        from accelerate.big_modeling import init_empty_weights
-                        import contextlib
-
-                        original_init_empty_weights = init_empty_weights
-
-                        @contextlib.contextmanager
-                        def _no_op_init_empty_weights(*args, **kwargs):
-                            yield
-
-                        import accelerate.big_modeling
-
-                        accelerate.big_modeling.init_empty_weights = _no_op_init_empty_weights
-                        try:
-                            return SentenceTransformer(
-                                self.settings.LOCAL_EMBEDDING_MODEL,
-                                device=self.settings.LOCAL_EMBEDDING_DEVICE,
-                            )
-                        finally:
-                            accelerate.big_modeling.init_empty_weights = original_init_empty_weights
-                    except ImportError:
-                        # accelerate 未安装，直接重试
-                        return SentenceTransformer(self.settings.LOCAL_EMBEDDING_MODEL)
-                raise
+            finally:
+                transformers.AutoModel.from_pretrained = _orig_from_pretrained
 
         try:
             self._local_model = await asyncio.wait_for(
