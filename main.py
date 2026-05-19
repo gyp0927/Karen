@@ -596,6 +596,10 @@ async def main():
             print(_c("lcyan", "  再见！"))
             print()
             break
+        except asyncio.TimeoutError:
+            print()
+            print(_c("lyellow", "  ⚡ 请求超时（120 秒），请重试或检查网络。"))
+            print()
         except Exception as e:
             logger.exception("Error in conversation loop")
             print(_c("lred", f"\n  ✗ 错误: {e}\n"))

@@ -112,7 +112,12 @@ class HumanInterface:
         logger.info(f"Sending message, graph_type={'fast' if self.fast_mode else 'coordination'}")
 
         try:
-            result = await self.graph.ainvoke(initial_state)
+            result = await asyncio.wait_for(
+                self.graph.ainvoke(initial_state), timeout=120.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("Graph invocation timed out after 120s")
+            raise
         finally:
             if applied_routing:
                 set_current_llm_config(None, sid=sid)
