@@ -109,16 +109,32 @@ async def memory_searcher_agent(query: str, user_id: str = "", session_id: str =
                 return ""
 
         retrieve_timeout = 3.0 if fast_mode else 5.0
+        all_memories = []
         try:
-            memories = await asyncio.wait_for(
-                store.retrieve(q, top_k=5, user_id=uid, source=sess),
+            # 1. 检索当前会话的记忆（更相关）
+            if sess:
+                session_memories = await asyncio.wait_for(
+                    store.retrieve(q, top_k=3, user_id=uid, source=sess),
+                    timeout=retrieve_timeout,
+                )
+                if session_memories:
+                    all_memories.extend(session_memories)
+            # 2. 检索全局记忆（跨会话）
+            global_memories = await asyncio.wait_for(
+                store.retrieve(q, top_k=3, user_id=uid, source=""),
                 timeout=retrieve_timeout,
             )
+            if global_memories:
+                # 去重：避免同一条记忆在 session + global 中重复出现
+                seen_ids = {m["memory_id"] for m in all_memories}
+                for m in global_memories:
+                    if m["memory_id"] not in seen_ids:
+                        all_memories.append(m)
         except TimeoutError:
             logger.warning(f"Memory retrieve timed out (>{retrieve_timeout}s)")
             return ""
-        if memories:
-            return store.format_memories_for_prompt(memories) or ""
+        if all_memories:
+            return store.format_memories_for_prompt(all_memories) or ""
         return ""
 
     return await _safe_search(_do_search, "记忆检索结果", query, user_id, session_id)
