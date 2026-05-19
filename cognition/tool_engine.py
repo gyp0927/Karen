@@ -156,6 +156,21 @@ async def read_file(path: str, max_lines: int = 200) -> str:
 
 
 @tool
+async def write_file(path: str, content: str) -> str:
+    """写入文件内容。当你需要创建新文件或修改已有文件时使用此工具。
+
+    Args:
+        path: 文件路径（支持 ~ 表示用户主目录）
+        content: 要写入的文本内容
+
+    Returns:
+        写入结果提示
+    """
+    from tools.system_tools import write_file as _write_file
+    return await _write_file(path, content)
+
+
+@tool
 async def list_directory(path: str = "") -> str:
     """列出目录内容。当你需要浏览某个文件夹的内容时使用此工具。
 
@@ -215,6 +230,7 @@ DEFAULT_TOOLS: list[BaseTool] = [
     memory_search,
     knowledge_search,
     read_file,
+    write_file,
     list_directory,
     search_files,
     execute_command,

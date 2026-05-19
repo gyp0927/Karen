@@ -665,9 +665,10 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
             list_directory,
             read_file,
             search_files,
+            write_file,
         )
 
-        tools = [read_file, list_directory, search_files, execute_command]
+        tools = [read_file, write_file, list_directory, search_files, execute_command]
 
     # ---- Skill 提示词注入：如果当前有激活的 skill，将 skill body 注入 system prompt ----
     if active_skill:

@@ -164,6 +164,38 @@ async def read_file(path: str, max_lines: int = 200) -> str:
         return f"[读取失败: {e}]"
 
 
+async def write_file(path: str, content: str) -> str:
+    """写入文件内容。当你需要创建新文件或修改已有文件时使用此工具。
+
+    Args:
+        path: 文件路径（支持 ~ 表示 HOME 目录）
+        content: 要写入的文本内容
+
+    Returns:
+        写入结果提示
+    """
+    p = _normalize_path(path)
+    if p is None:
+        return f"[错误: 只能访问 HOME 目录({ _HOME_DIR })下的文件]"
+
+    # 禁止写入系统关键路径
+    _PROTECTED_NAMES = {"boot.ini", "ntldr", "pagefile.sys", "hiberfil.sys"}
+    if p.name.lower() in _PROTECTED_NAMES:
+        return f"[错误: 禁止覆盖系统文件: {p.name}]"
+
+    # 大小限制：最多写入 1MB
+    if len(content) > 1024 * 1024:
+        return "[错误: 内容超过 1MB 限制]"
+
+    try:
+        # 确保父目录存在
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return f"写入成功: {p} ({len(content)} 字符)"
+    except Exception as e:
+        return f"[写入失败: {e}]"
+
+
 async def list_directory(path: str = "") -> str:
     """列出目录内容。
 

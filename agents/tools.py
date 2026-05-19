@@ -16,6 +16,7 @@ TOOL_CALLER_PROMPT = """你是 ToolCaller（工具调用专家）。
 可用工具：
 - execute_python: 执行 Python 代码，用于数学计算、数据处理、验证代码等
 - read_file: 读取本地文件内容
+- write_file: 写入/创建本地文件
 - list_directory: 列出目录内容
 - search_files: 按文件名搜索文件
 - execute_command: 执行安全的系统命令（ls、cat、git 等）
@@ -44,6 +45,11 @@ def _need_tool_call(query: str) -> bool:
             "文档",
             "读取",
             "查看",
+            "写入",
+            "创建文件",
+            "写文件",
+            "修改文件",
+            "保存文件",
             "目录",
             "文件夹",
             "列出",
@@ -55,6 +61,8 @@ def _need_tool_call(query: str) -> bool:
             "file",
             "document",
             "read",
+            "write",
+            "create file",
             "folder",
             "directory",
             "list",
