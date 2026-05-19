@@ -251,11 +251,10 @@ async def execute_tool_call(tool_call: dict, available_tools: list[BaseTool] | N
         if t.name == tool_name:
             try:
                 logger.info(f"[Tool] 执行 {tool_name}({tool_args})")
-                # 所有工具统一走异步路径，避免同步调用阻塞事件循环
-                if asyncio.iscoroutinefunction(t.ainvoke):
-                    result = await t.ainvoke(tool_args)
-                else:
-                    result = await asyncio.to_thread(t.invoke, tool_args)
+                # BaseTool.ainvoke 总是异步方法，直接 await 即可。
+                # 注意：不要判断 asyncio.iscoroutinefunction(t.ainvoke)，
+                # 因为对 bound method 它永远返回 False，会错误地走到同步路径。
+                result = await t.ainvoke(tool_args)
                 logger.info(f"[Tool] {tool_name} 完成")
                 return str(result) if result else ""
             except Exception as e:
