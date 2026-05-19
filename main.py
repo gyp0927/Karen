@@ -471,11 +471,15 @@ async def main():
 
     session_start_time = time.time()
 
+    # 打印初始状态栏（让第一次输入前也有状态显示）
+    print(_render_status_bar(model_name, 0, 0))
+
     # 对话循环
     while True:
         try:
             # ── 用户输入 ────────────────────────────────────
             print()
+            print(_c("pink", "─" * _MSG_W))
             user_input = _smart_input(_c("pink", "● ")).strip()
             if not user_input:
                 continue
