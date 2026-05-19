@@ -2,8 +2,13 @@ import asyncio
 import logging
 import os
 import re
+import sys
 import time
 import warnings
+
+# Windows cmd.exe 默认不解析 ANSI 转义序列，需先启用 VT100 模式
+if sys.platform == "win32":
+    os.system("")
 
 # 在 import langgraph 之前过滤其弃用警告
 # 必须用具体类名，标准 PendingDeprecationWarning 子类匹配不生效
