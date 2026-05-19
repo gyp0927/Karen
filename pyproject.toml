@@ -56,4 +56,4 @@ ignore_errors = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["data*", "tests*", "tools*", "__pycache__*"]
+exclude = ["data*", "tests*", "__pycache__*"]

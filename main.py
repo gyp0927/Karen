@@ -4,8 +4,12 @@ import os
 import re
 import warnings
 
-warnings.filterwarnings("ignore", module="langgraph.*")
-warnings.filterwarnings("ignore", module="langchain.*")
+# 在 import langgraph 之前过滤其弃用警告
+# 必须用具体类名，标准 PendingDeprecationWarning 子类匹配不生效
+from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+warnings.filterwarnings("ignore", category=LangChainPendingDeprecationWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 
 from agents.nodes import create_agents
 from interface.human_interface import HumanInterface
