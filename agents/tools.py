@@ -40,11 +40,35 @@ def _need_tool_call(query: str) -> bool:
     if any(
         kw in q
         for kw in [
-            "文件", "文档", "读取", "查看", "目录", "文件夹", "列出",
-            "搜索文件", "路径", "内容", "打开文件", "帮我找",
-            "file", "document", "read", "folder", "directory", "list",
-            "path", "content", "open file", "find file", "show me",
-            "ls ", "cat ", "dir ", "grep ", "head ", "tail ",
+            "文件",
+            "文档",
+            "读取",
+            "查看",
+            "目录",
+            "文件夹",
+            "列出",
+            "搜索文件",
+            "路径",
+            "内容",
+            "打开文件",
+            "帮我找",
+            "file",
+            "document",
+            "read",
+            "folder",
+            "directory",
+            "list",
+            "path",
+            "content",
+            "open file",
+            "find file",
+            "show me",
+            "ls ",
+            "cat ",
+            "dir ",
+            "grep ",
+            "head ",
+            "tail ",
         ]
     ):
         return True
@@ -53,10 +77,28 @@ def _need_tool_call(query: str) -> bool:
     if any(
         kw in q
         for kw in [
-            "命令", "执行", "运行", "终端", "shell", "cmd", "命令行",
-            "git ", "npm ", "pip ", "python ", "node ", "ping ",
-            "command", "execute", "run", "terminal", "system",
-            "查看进程", "磁盘空间", "系统信息", "环境变量",
+            "命令",
+            "执行",
+            "运行",
+            "终端",
+            "shell",
+            "cmd",
+            "命令行",
+            "git ",
+            "npm ",
+            "pip ",
+            "python ",
+            "node ",
+            "ping ",
+            "command",
+            "execute",
+            "run",
+            "terminal",
+            "system",
+            "查看进程",
+            "磁盘空间",
+            "系统信息",
+            "环境变量",
         ]
     ):
         return True
