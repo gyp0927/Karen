@@ -4,8 +4,8 @@ import os
 import re
 import warnings
 
-warnings.filterwarnings("ignore", message="The default value of `allowed_objects`", category=DeprecationWarning)
-warnings.filterwarnings("ignore", message="The default value of `allowed_objects`", category=PendingDeprecationWarning)
+warnings.filterwarnings("ignore", module="langgraph.*")
+warnings.filterwarnings("ignore", module="langchain.*")
 
 from agents.nodes import create_agents
 from interface.human_interface import HumanInterface
