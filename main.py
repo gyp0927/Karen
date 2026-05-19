@@ -267,7 +267,7 @@ async def main():
         _c("dim", "  /review 审查开关      "),
         _c("dim", "  /fast   模式切换      "),
         _c("dim", "  /clear  清空历史      "),
-        _T,
+        _c("dim", "  /help   命令列表      "),
         _T,
         _T,
     ]
@@ -341,6 +341,30 @@ async def main():
                     line = f"  [{sender}]: {content}"
                     chunk, _ = _split_visual(line, _MSG_W - 2)
                     pad = _MSG_W - 2 - _visual_len(chunk)
+                    print(_c("lcyan", "│") + chunk + " " * max(pad, 0) + _c("lcyan", "│"))
+                print(_c("lcyan", "└" + "─" * (_MSG_W - 2) + "┘"))
+                print()
+                continue
+            elif user_input.lower() in ("/", "/help"):
+                print()
+                header = " 可用命令 "
+                header_v = _visual_len(header)
+                left = (_MSG_W - 2 - header_v) // 2
+                right = _MSG_W - 2 - header_v - left
+                print(_c("lcyan", "┌" + "─" * left) + _c("bold+lcyan", header) + _c("lcyan", "─" * right + "┐"))
+                cmds = [
+                    ("  exit    ", "退出对话"),
+                    ("  /review ", "审查模式开关"),
+                    ("  /fast   ", "快速/协调模式切换"),
+                    ("  /clear  ", "清空对话历史"),
+                    ("  /history", "查看对话历史"),
+                    ("  /help   ", "显示此帮助"),
+                ]
+                for name, desc in cmds:
+                    line = f"{_c('yellow', name)}  {desc}"
+                    plain = f"{name}  {desc}"
+                    chunk, _ = _split_visual(line, _MSG_W - 2)
+                    pad = _MSG_W - 2 - _visual_len(plain)
                     print(_c("lcyan", "│") + chunk + " " * max(pad, 0) + _c("lcyan", "│"))
                 print(_c("lcyan", "└" + "─" * (_MSG_W - 2) + "┘"))
                 print()
