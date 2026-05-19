@@ -472,7 +472,7 @@ async def main():
     session_start_time = time.time()
 
     # 打印初始状态栏（让第一次输入前也有状态显示）
-    print(_render_status_bar(model_name, 0, 0))
+    print(_render_status_bar("default", 0, 0))
 
     # 对话循环
     while True:
