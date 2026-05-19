@@ -223,6 +223,93 @@ async def execute_command(command: str, timeout: int = 30) -> str:
     return await _execute_command(command, timeout)
 
 
+@tool
+async def edit_file(path: str, old_string: str, new_string: str) -> str:
+    """编辑文件内容。查找 old_string 并将其精确替换为 new_string。
+
+    用于修改已有文件中的特定内容片段。old_string 必须完全匹配文件中的内容
+    （包括空白符和换行）。当 old_string 为空时，在文件开头插入 new_string。
+
+    Args:
+        path: 文件路径（支持 ~ 表示用户主目录）
+        old_string: 要替换的文本（必须精确匹配）
+        new_string: 替换后的新文本
+
+    Returns:
+        编辑结果提示
+    """
+    from tools.system_tools import edit_file as _edit_file
+    return await _edit_file(path, old_string, new_string)
+
+
+@tool
+async def apply_patch(path: str, patch: str) -> str:
+    """应用 patch 到文件。patch 格式为 unified diff（类似 git diff）。
+
+    用于批量修改文件中的多处内容。支持单文件的多个 hunk 修改。
+
+    Args:
+        path: 目标文件路径（支持 ~ 表示用户主目录）
+        patch: unified diff 格式的 patch 文本
+
+    Returns:
+        应用结果提示
+    """
+    from tools.system_tools import apply_patch as _apply_patch
+    return await _apply_patch(path, patch)
+
+
+@tool
+async def web_fetch(url: str, max_chars: int = 3000) -> str:
+    """获取网页内容。当你需要查看某个具体网页的详细内容时使用此工具。
+
+    与 web_search 不同，web_fetch 直接抓取指定 URL 的页面并提取正文，
+    适合获取特定页面的完整信息。
+
+    Args:
+        url: 网页 URL
+        max_chars: 最大返回字符数，默认 3000
+
+    Returns:
+        网页正文内容
+    """
+    from tools.search import fetch_page_content
+    try:
+        return await asyncio.to_thread(fetch_page_content, url, max_chars)
+    except Exception as e:
+        logger.warning(f"Web fetch tool failed: {e}")
+        return f"[获取网页失败: {e}]"
+
+
+@tool
+async def browser_control(action: str, url: str = "", selector: str = "", text: str = "", wait_ms: int = 1000) -> str:
+    """控制浏览器执行操作。当你需要与网页交互（点击、填表、截图）时使用此工具。
+
+    支持的操作：
+    - navigate: 导航到指定 URL
+    - click: 点击 CSS 选择器匹配的元素
+    - fill: 在输入框中填入文本
+    - screenshot: 截取页面截图
+    - get_text: 获取页面可见文本
+
+    Args:
+        action: 操作类型（navigate, click, fill, screenshot, get_text）
+        url: 导航目标 URL（action=navigate 时必填）
+        selector: CSS 选择器（click/fill/get_text 时必填）
+        text: 要填入的文本（action=fill 时必填）
+        wait_ms: 操作后等待毫秒数，默认 1000
+
+    Returns:
+        操作结果或页面文本/截图路径
+    """
+    from tools.browser_tools import browser_control as _browser_control
+    try:
+        return await _browser_control(action, url, selector, text, wait_ms)
+    except Exception as e:
+        logger.warning(f"Browser control tool failed: {e}")
+        return f"[浏览器控制失败: {e}]"
+
+
 # ========== 工具注册表 ==========
 
 DEFAULT_TOOLS: list[BaseTool] = [
@@ -231,9 +318,13 @@ DEFAULT_TOOLS: list[BaseTool] = [
     knowledge_search,
     read_file,
     write_file,
+    edit_file,
+    apply_patch,
     list_directory,
     search_files,
     execute_command,
+    web_fetch,
+    browser_control,
 ]
 # 安全：execute_python 不通过 LLM tool calling 自动触发，
 # 只允许用户通过 /api/execute 端点手动执行，防止恶意提示词诱导 LLM 执行危险代码。

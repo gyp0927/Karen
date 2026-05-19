@@ -661,14 +661,28 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
     tools = None
     if _need_tool_call(original_query):
         from cognition.tool_engine import (
+            apply_patch,
+            browser_control,
+            edit_file,
             execute_command,
             list_directory,
             read_file,
             search_files,
+            web_fetch,
             write_file,
         )
 
-        tools = [read_file, write_file, list_directory, search_files, execute_command]
+        tools = [
+            read_file,
+            write_file,
+            edit_file,
+            apply_patch,
+            list_directory,
+            search_files,
+            execute_command,
+            web_fetch,
+            browser_control,
+        ]
 
     # ---- Skill 提示词注入：如果当前有激活的 skill，将 skill body 注入 system prompt ----
     if active_skill:

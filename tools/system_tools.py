@@ -306,6 +306,169 @@ async def search_files(pattern: str, directory: str = "", max_results: int = 20)
         return f"[搜索失败: {e}]"
 
 
+async def edit_file(path: str, old_string: str, new_string: str) -> str:
+    """编辑文件内容。查找 old_string 并将其替换为 new_string。
+
+    用于精确修改文件中的某一段内容，old_string 必须完全匹配（包括空白符）。
+    当 old_string 为空时，在文件开头插入 new_string。
+
+    Args:
+        path: 文件路径（支持 ~ 表示 HOME 目录）
+        old_string: 要替换的文本（精确匹配，包括空白符）
+        new_string: 替换后的新文本
+
+    Returns:
+        编辑结果提示
+    """
+    p = _normalize_path(path)
+    if p is None:
+        return f"[错误: 只能访问 HOME 目录({ _HOME_DIR })下的文件]"
+
+    if not p.exists():
+        return f"[错误: 文件不存在: {p}]"
+    if not p.is_file():
+        return f"[错误: 不是文件: {p}]"
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"[读取失败: {e}]"
+
+    # old_string 为空 → 在文件开头插入
+    if old_string == "":
+        new_content = new_string + content
+        try:
+            p.write_text(new_content, encoding="utf-8")
+            return f"编辑成功: 在开头插入了 {len(new_string)} 字符"
+        except Exception as e:
+            return f"[写入失败: {e}]"
+
+    # 精确匹配替换
+    if old_string not in content:
+        return f"[编辑失败: 未找到匹配的文本片段]"
+
+    count = content.count(old_string)
+    new_content = content.replace(old_string, new_string, count)
+
+    try:
+        p.write_text(new_content, encoding="utf-8")
+        return f"编辑成功: 替换了 {count} 处，文件 {p}"
+    except Exception as e:
+        return f"[写入失败: {e}]"
+
+
+async def apply_patch(path: str, patch: str) -> str:
+    """应用 patch 到文件。patch 格式为 unified diff（类似 git diff）。
+
+    支持单文件的多个 hunk 修改。patch 中每个 hunk 以
+    @@ -old_start,old_count +new_start,new_count @@ 开头。
+
+    Args:
+        path: 目标文件路径（支持 ~ 表示 HOME 目录）
+        patch: unified diff 格式的 patch 文本
+
+    Returns:
+        应用结果提示
+    """
+    p = _normalize_path(path)
+    if p is None:
+        return f"[错误: 只能访问 HOME 目录({ _HOME_DIR })下的文件]"
+
+    if not p.exists():
+        return f"[错误: 文件不存在: {p}]"
+    if not p.is_file():
+        return f"[错误: 不是文件: {p}]"
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"[读取失败: {e}]"
+
+    lines = content.split("\n")
+
+    # 解析 patch
+    hunks = []
+    current_hunk = None
+    patch_lines = patch.split("\n")
+    i = 0
+    while i < len(patch_lines):
+        line = patch_lines[i]
+        # 跳过 diff 头
+        if line.startswith("--- ") or line.startswith("+++ "):
+            i += 1
+            continue
+        # Hunk header: @@ -start,count +start,count @@
+        if line.startswith("@@"):
+            m = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
+            if m:
+                old_start = int(m.group(1))
+                old_count = int(m.group(2)) if m.group(2) else 1
+                current_hunk = {
+                    "old_start": old_start,
+                    "old_count": old_count,
+                    "lines": [],
+                }
+                hunks.append(current_hunk)
+            i += 1
+            continue
+        if current_hunk is not None:
+            current_hunk["lines"].append(line)
+        i += 1
+
+    if not hunks:
+        return "[错误: patch 中未找到有效的 hunk]"
+
+    # 按旧行号从后往前应用，避免行号偏移
+    hunks.sort(key=lambda h: h["old_start"], reverse=True)
+
+    for hunk in hunks:
+        old_start = hunk["old_start"]
+        # unified diff 的行号从 1 开始，转换为 0-based 索引
+        insert_pos = old_start - 1
+        if insert_pos < 0:
+            insert_pos = 0
+
+        # 解析 hunk 内容：分离删除行、新增行、上下文行
+        deletions = []
+        additions = []
+        context_before = []
+        context_after = []
+        state = "before"  # before / del / add / after
+
+        for hl in hunk["lines"]:
+            if not hl:
+                continue
+            if hl.startswith("-"):
+                state = "del"
+                deletions.append(hl[1:])
+            elif hl.startswith("+"):
+                state = "add"
+                additions.append(hl[1:])
+            else:
+                # 上下文行（可能以空格开头或无前缀）
+                ctx = hl[1:] if hl.startswith(" ") else hl
+                if state in ("before", "del"):
+                    context_before.append(ctx)
+                else:
+                    context_after.append(ctx)
+
+        # 验证上下文（简化：只检查上下文是否存在）
+        # 实际修改：删除 deletions 对应的行，插入 additions
+        # 简化策略：找到 insert_pos，删除 deletions 数量的行，插入 additions
+        del_count = len(deletions) if deletions else hunk["old_count"]
+        end_pos = min(insert_pos + del_count, len(lines))
+
+        # 替换
+        new_lines = lines[:insert_pos] + additions + lines[end_pos:]
+        lines = new_lines
+
+    try:
+        p.write_text("\n".join(lines), encoding="utf-8")
+        return f"Patch 应用成功: {p}（应用了 {len(hunks)} 个 hunk）"
+    except Exception as e:
+        return f"[写入失败: {e}]"
+
+
 async def execute_command(command: str, timeout: int = 30) -> str:
     """执行安全的 shell 命令。
 

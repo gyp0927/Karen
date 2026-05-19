@@ -17,9 +17,13 @@ TOOL_CALLER_PROMPT = """你是 ToolCaller（工具调用专家）。
 - execute_python: 执行 Python 代码，用于数学计算、数据处理、验证代码等
 - read_file: 读取本地文件内容
 - write_file: 写入/创建本地文件
+- edit_file: 编辑文件内容（查找替换）
+- apply_patch: 应用 patch 修改文件（unified diff 格式）
 - list_directory: 列出目录内容
 - search_files: 按文件名搜索文件
 - execute_command: 执行安全的系统命令（ls、cat、git 等）
+- web_fetch: 获取指定网页的内容
+- browser_control: 控制浏览器（导航、点击、截图、获取文本）
 
 注意：
 - 不要调用搜索类工具（联网搜索、记忆搜索、知识库搜索），这些由其他 Agent 处理
@@ -160,6 +164,60 @@ def _need_tool_call(query: str) -> bool:
         ]
     ):
         return True
+
+    # 编辑/替换文件内容
+    if any(
+        kw in q
+        for kw in [
+            "编辑文件",
+            "修改内容",
+            "替换",
+            "查找替换",
+            "patch",
+            "diff",
+            "git diff",
+            "apply patch",
+            "edit",
+            "replace",
+            "modify file",
+        ]
+    ):
+        return True
+
+    # 网页获取
+    if any(
+        kw in q
+        for kw in [
+            "打开网页",
+            "抓取网页",
+            "获取网页",
+            "fetch",
+            "curl",
+            "网页内容",
+            "打开这个链接",
+            "查看网页",
+        ]
+    ):
+        return True
+
+    # 浏览器控制
+    if any(
+        kw in q
+        for kw in [
+            "浏览器",
+            "截图",
+            "网页截图",
+            "点击",
+            "网页操作",
+            "自动化",
+            "browser",
+            "screenshot",
+            "navigate",
+            "点击网页",
+        ]
+    ):
+        return True
+
     return False
 
 
