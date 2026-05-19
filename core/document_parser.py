@@ -1,4 +1,5 @@
 import os
+from typing import Any
 
 
 def parse_document(file_path: str) -> str:
@@ -26,7 +27,7 @@ def _parse_pdf(file_path: str) -> str:
         try:
             import pypdf
 
-            _PdfReader = pypdf.PdfReader
+            _PdfReader: type[Any] = pypdf.PdfReader
         except ImportError:
             import PyPDF2
 
