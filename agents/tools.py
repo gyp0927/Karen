@@ -9,12 +9,16 @@ from agents.llm import get_llm
 TOOL_CALLER_PROMPT = """你是 ToolCaller（工具调用专家）。
 
 你的职责：
-1. 分析用户问题是否需要调用非搜索类工具（如计算、代码执行）
+1. 分析用户问题是否需要调用非搜索类工具（如计算、代码执行、文件操作、系统命令）
 2. 如果需要，调用合适的工具获取结果
 3. 将工具执行结果以简洁的方式返回
 
 可用工具：
 - execute_python: 执行 Python 代码，用于数学计算、数据处理、验证代码等
+- read_file: 读取本地文件内容
+- list_directory: 列出目录内容
+- search_files: 按文件名搜索文件
+- execute_command: 执行安全的系统命令（ls、cat、git 等）
 
 注意：
 - 不要调用搜索类工具（联网搜索、记忆搜索、知识库搜索），这些由其他 Agent 处理
@@ -23,15 +27,40 @@ TOOL_CALLER_PROMPT = """你是 ToolCaller（工具调用专家）。
 
 
 def _need_tool_call(query: str) -> bool:
-    """判断是否需要非搜索类工具调用（计算、代码等）。
+    """判断是否需要非搜索类工具调用（计算、代码、文件、命令等）。
 
-    只触发真正的复杂计算或代码执行请求，
-    避免简单数学问题（如'1+1'）走工具调用慢路径。
+    只触发真正需要工具辅助的请求，避免简单问题走工具调用慢路径。
     """
     q = query.lower().strip()
     # 简单算术表达式（只有数字和 +-*/，无复杂运算）→ 不走工具
     if re.match(r"^[\d\s+\-*/().]+$", q) and len(q) <= 20 and any(c.isdigit() for c in q):
         return False
+
+    # 文件操作关键词
+    if any(
+        kw in q
+        for kw in [
+            "文件", "文档", "读取", "查看", "目录", "文件夹", "列出",
+            "搜索文件", "路径", "内容", "打开文件", "帮我找",
+            "file", "document", "read", "folder", "directory", "list",
+            "path", "content", "open file", "find file", "show me",
+            "ls ", "cat ", "dir ", "grep ", "head ", "tail ",
+        ]
+    ):
+        return True
+
+    # 系统命令关键词
+    if any(
+        kw in q
+        for kw in [
+            "命令", "执行", "运行", "终端", "shell", "cmd", "命令行",
+            "git ", "npm ", "pip ", "python ", "node ", "ping ",
+            "command", "execute", "run", "terminal", "system",
+            "查看进程", "磁盘空间", "系统信息", "环境变量",
+        ]
+    ):
+        return True
+
     # 复杂计算关键词（中英文）
     if any(
         kw in q

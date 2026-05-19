@@ -138,12 +138,86 @@ async def execute_python(code: str) -> str:
         return f"[代码执行失败: {e}]"
 
 
+# ---- 系统工具（文件查询 + 命令执行） ----
+
+@tool
+async def read_file(path: str, max_lines: int = 200) -> str:
+    """读取本地文件内容。当你需要查看某个文件的内容时使用此工具。
+
+    Args:
+        path: 文件路径（支持 ~ 表示用户主目录）
+        max_lines: 最多读取行数，默认 200 行
+
+    Returns:
+        文件内容文本
+    """
+    from tools.system_tools import read_file as _read_file
+    return await _read_file(path, max_lines)
+
+
+@tool
+async def list_directory(path: str = "") -> str:
+    """列出目录内容。当你需要浏览某个文件夹的内容时使用此工具。
+
+    Args:
+        path: 目录路径（支持 ~ 表示用户主目录，空字符串表示主目录）
+
+    Returns:
+        目录列表，包含文件和子文件夹
+    """
+    from tools.system_tools import list_directory as _list_directory
+    return await _list_directory(path)
+
+
+@tool
+async def search_files(pattern: str, directory: str = "", max_results: int = 20) -> str:
+    """搜索文件。当你需要查找某个文件但不知道具体路径时使用此工具。
+
+    Args:
+        pattern: 搜索模式（支持 * 和 ? 通配符，如 *.py, test*）
+        directory: 搜索起始目录（默认主目录）
+        max_results: 最大返回结果数
+
+    Returns:
+        匹配的文件路径列表
+    """
+    from tools.system_tools import search_files as _search_files
+    return await _search_files(pattern, directory, max_results)
+
+
+@tool
+async def execute_command(command: str, timeout: int = 30) -> str:
+    """执行安全的系统命令。当你需要运行命令行工具获取系统信息时使用此工具。
+
+    支持的命令类型：
+    - 文件查看: ls, cat, head, tail, find, grep, wc
+    - 系统信息: pwd, date, whoami, ps, df, du, systeminfo
+    - 开发工具: python, node, npm, git, pip
+    - 网络诊断: ping, nslookup, netstat, ipconfig
+
+    禁止的操作：删除文件、格式化磁盘、修改权限、管道/命令链。
+
+    Args:
+        command: 要执行的命令
+        timeout: 超时时间（秒），默认 30 秒
+
+    Returns:
+        命令输出结果
+    """
+    from tools.system_tools import execute_command as _execute_command
+    return await _execute_command(command, timeout)
+
+
 # ========== 工具注册表 ==========
 
 DEFAULT_TOOLS: list[BaseTool] = [
     web_search,
     memory_search,
     knowledge_search,
+    read_file,
+    list_directory,
+    search_files,
+    execute_command,
 ]
 # 安全：execute_python 不通过 LLM tool calling 自动触发，
 # 只允许用户通过 /api/execute 端点手动执行，防止恶意提示词诱导 LLM 执行危险代码。
