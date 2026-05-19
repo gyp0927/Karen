@@ -196,11 +196,19 @@ def _need_tool_call(query: str) -> bool:
             "网页内容",
             "打开这个链接",
             "查看网页",
+            "访问网页",
+            "访问这个网页",
         ]
     ):
         return True
 
-    # 浏览器控制
+    # 浏览器控制 / 网页操作意图
+    # 组合检测：出现 "打开/访问/帮我打开" + "网页/网站/链接/网址"
+    has_open_intent = any(kw in q for kw in ["打开", "访问", "进入"])
+    has_web_target = any(kw in q for kw in ["网页", "网站", "链接", "网址", "url", "www.", ".com", ".cn"])
+    if has_open_intent and has_web_target:
+        return True
+
     if any(
         kw in q
         for kw in [
