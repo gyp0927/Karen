@@ -172,7 +172,7 @@ class HumanInterface:
                 )
                 logger.debug(f"Memory saved for session {session_id}")
             except Exception as e:
-                logger.warning(f"Memory save failed: {e}")
+                logger.debug(f"Memory save failed: {e}")
 
         try:
             asyncio.create_task(_do_save())
