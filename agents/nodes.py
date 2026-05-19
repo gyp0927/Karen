@@ -624,7 +624,7 @@ async def responder_node(state: dict, sid: str | None = None) -> dict:
             try:
                 search_context = await asyncio.wait_for(
                     run_parallel_search(state),
-                    timeout=1.5,
+                    timeout=3.0,
                 )
             except TimeoutError:
                 logger.info("[responder] Search timeout (1.5s), proceeding with knowledge")
