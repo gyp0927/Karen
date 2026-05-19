@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 import warnings
 
 # 在 import langgraph 之前过滤其弃用警告
@@ -190,6 +191,65 @@ def _render_avatar_row(pixels: list[str]) -> str:
     return out
 
 
+async def _thinking_spinner(stop_event: asyncio.Event, interval: float = 0.3):
+    """AI 处理期间显示动态思考动画，用 \\r 覆盖同一行。"""
+    frames = ["(⊙_⊙)", "(◉_◉)", "(⊙ω⊙)", "(◕_◕)"]
+    texts = ["思考中...", "搜索中...", "整理中...", "构思中..."]
+    i = 0
+    while not stop_event.is_set():
+        frame = frames[i % len(frames)]
+        text = texts[i % len(texts)]
+        line = f"\r{_c('yellow', frame)} {_c('dim', text)}"
+        print(line, end="", flush=True)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            break
+        except TimeoutError:
+            pass
+        i += 1
+    # 清除 spinner 行
+    print(f"\r{' ' * 40}\r", end="", flush=True)
+
+
+def _render_status_bar(model: str, used_tokens: int, elapsed_sec: int) -> str:
+    """渲染终端状态栏：$ 模型名 | 用量/上限 [进度条] 百分比 | 时间"""
+    # token 格式化
+    if used_tokens >= 1000:
+        token_str = f"{used_tokens / 1000:.1f}K"
+    else:
+        token_str = str(used_tokens)
+
+    # 根据模型确定上限
+    model_lower = model.lower()
+    if "kimi" in model_lower:
+        max_tokens = 260000
+    else:
+        max_tokens = 128000
+    max_str = f"{max_tokens / 1000:.0f}K"
+
+    # 进度条
+    pct = min(used_tokens / max_tokens, 1.0) if max_tokens > 0 else 0.0
+    bar_len = 20
+    filled = int(pct * bar_len)
+    bar = "█" * filled + "░" * (bar_len - filled)
+
+    # 百分比
+    pct_str = f"{int(pct * 100)}%"
+
+    # 时间
+    hours = elapsed_sec // 3600
+    mins = (elapsed_sec % 3600) // 60
+    if hours > 0:
+        time_str = f"{hours}h {mins:02d}m"
+    else:
+        time_str = f"{mins}m"
+
+    # 组装（带颜色）
+    model_colored = _c("yellow", model or "default")
+    bar_colored = _c("green", bar)
+    return f"$ {model_colored} | {token_str}/{max_str} [{bar_colored}] {pct_str} | {time_str}"
+
+
 async def main():
     # ── 启动画面（头像 + 标题并排）──────────────────────────
     avatar_lines = [_render_avatar_row(row) for row in _AVATAR_PIXELS]
@@ -232,6 +292,8 @@ async def main():
         review=False,
         review_language="zh",
     )
+
+    session_start_time = time.time()
 
     # 对话循环
     while True:
@@ -282,7 +344,25 @@ async def main():
                 continue
 
             # ── AI 回复 ─────────────────────────────────────
-            response = await interface.send_message(user_input)
+            # 获取路由信息用于状态栏
+            from core.model_router import get_router
+            router = get_router()
+            history = msg_manager.get_messages()
+            history_turns = len(history) // 2
+            route_result = router.route(user_input, history_turns)
+            model_name = route_result["config"].get("model", "default")
+
+            # 启动思考动画
+            stop_event = asyncio.Event()
+            spinner_task = asyncio.create_task(_thinking_spinner(stop_event))
+            try:
+                response = await interface.send_message(user_input)
+            finally:
+                stop_event.set()
+                try:
+                    await asyncio.wait_for(spinner_task, timeout=0.5)
+                except TimeoutError:
+                    pass
 
             # 分隔线
             print(_c("dim", "─" * _MSG_W))
@@ -302,6 +382,18 @@ async def main():
                     print(_c("lcyan", "│ ") + chunk + " " * max(pad, 0) + _c("lcyan", " │"))
 
             print(_c("lcyan", "╰" + "─" * (_MSG_W - 2) + "╯"))
+
+            # 状态栏
+            sid = msg_manager.get_current_session_id()
+            from state.stats import get_session_stats
+            session_stats = get_session_stats(sid)
+            elapsed = int(time.time() - session_start_time)
+            status_line = _render_status_bar(
+                session_stats.get("last_model") or model_name,
+                session_stats.get("total_tokens", 0),
+                elapsed,
+            )
+            print(status_line)
 
         except KeyboardInterrupt:
             print()

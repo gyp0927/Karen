@@ -148,5 +148,31 @@ def get_daily_stats(days: int = 7) -> list[dict]:
         ]
 
 
+def get_session_stats(session_id: str) -> dict:
+    """获取指定会话的累计统计（用于终端状态栏）。"""
+    with _lock:
+        conn = _get_conn()
+        cursor = conn.execute(
+            """SELECT
+                COUNT(*) as call_count,
+                SUM(total_tokens) as total_tokens,
+                SUM(prompt_tokens) as prompt_tokens,
+                SUM(completion_tokens) as completion_tokens,
+                SUM(estimated_cost_usd) as total_cost,
+                MAX(model) as last_model
+               FROM api_calls WHERE session_id = ?""",
+            (session_id,)
+        )
+        row = cursor.fetchone()
+        return {
+            "call_count": row["call_count"] or 0,
+            "total_tokens": row["total_tokens"] or 0,
+            "prompt_tokens": row["prompt_tokens"] or 0,
+            "completion_tokens": row["completion_tokens"] or 0,
+            "total_cost_usd": round(row["total_cost"] or 0, 4),
+            "last_model": row["last_model"] or "",
+        }
+
+
 # 初始化数据库
 init_db()
