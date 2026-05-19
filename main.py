@@ -86,6 +86,9 @@ C = {
     "lmagenta": "\033[95m",
     "lcyan": "\033[96m",
     "lwhite": "\033[97m",
+    # 真彩色（RGB）
+    "pink": "\033[38;2;255;121;198m",
+    "lpink": "\033[38;2;255;182;219m",
 }
 
 _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -473,7 +476,7 @@ async def main():
         try:
             # ── 用户输入 ────────────────────────────────────
             print()
-            user_input = _smart_input(_c("yellow", "● ")).strip()
+            user_input = _smart_input(_c("pink", "● ")).strip()
             if not user_input:
                 continue
 
