@@ -18,7 +18,10 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 
 from agents.nodes import create_agents
+from core.memory_client import get_memory_store
+from core.summarizer import ConversationSummarizer
 from interface.human_interface import HumanInterface
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from state.manager import SessionManager
 
 # ── 日志配置：文件记录全量，控制台仅 WARNING ───────────────
@@ -194,6 +197,54 @@ def _render_avatar_row(pixels: list[str]) -> str:
     return out
 
 
+# ── 上下文压缩计数（每次终端会话最多 2 次）───────────────────
+_COMPACT_COUNT = 0
+
+
+async def _do_compact(msg_manager: SessionManager) -> str | None:
+    """压缩当前会话的历史消息：摘要旧消息并存入记忆系统，保留最近 1 轮。"""
+    global _COMPACT_COUNT
+    if _COMPACT_COUNT >= 2:
+        return None
+
+    messages = msg_manager.get_messages()
+    if len(messages) < 4:  # 至少需要 2 轮才能压缩
+        return None
+
+    # 保留最近 1 轮（2 条消息），压缩之前的
+    old_messages = messages[:-2]
+    recent_messages = messages[-2:]
+
+    summarizer = ConversationSummarizer(threshold=4, keep_recent=0)
+    summary = summarizer.summarize(old_messages, llm=None)
+    if not summary:
+        return None
+
+    # 存入记忆系统
+    try:
+        store = get_memory_store()
+        await store.save_memory(
+            content=f"[上下文压缩摘要]\n{summary}",
+            memory_type="summary",
+            source=msg_manager.get_current_session_id(),
+            importance=0.8,
+            tags=["compact", "conversation_summary"],
+        )
+    except Exception as e:
+        logger.warning(f"保存压缩摘要到记忆系统失败: {e}")
+
+    # 清空当前会话，只保留最近 1 轮
+    msg_manager.clear()
+    for msg in recent_messages:
+        if isinstance(msg, HumanMessage):
+            msg_manager.add_human_message(msg.content)
+        elif isinstance(msg, AIMessage):
+            msg_manager.add_agent_message(msg.content, getattr(msg, "name", "assistant"))
+
+    _COMPACT_COUNT += 1
+    return summary
+
+
 async def _thinking_spinner(stop_event: asyncio.Event, interval: float = 0.3):
     """AI 处理期间显示动态思考动画，用 \\r 覆盖同一行。"""
     frames = ["(⊙_⊙)", "(◉_◉)", "(⊙ω⊙)", "(◕_◕)"]
@@ -255,6 +306,7 @@ def _print_help_box():
         ("  exit    ", "退出对话"),
         ("  /review ", "审查模式开关"),
         ("  /fast   ", "快速/协调模式切换"),
+        ("  /compact", "压缩上下文到记忆"),
         ("  /clear  ", "清空对话历史"),
         ("  /history", "查看对话历史"),
         ("  /help   ", "显示此帮助"),
@@ -361,11 +413,12 @@ async def main():
         _T,
         _c("dim", "  输入消息开始对话      "),
         _T,
-        _c("dim", "  exit    退出对话      "),
-        _c("dim", "  /review 审查开关      "),
-        _c("dim", "  /fast   模式切换      "),
-        _c("dim", "  /clear  清空历史      "),
-        _c("dim", "  /help   命令列表      "),
+        _c("dim", "  exit     退出对话      "),
+        _c("dim", "  /review  审查开关      "),
+        _c("dim", "  /fast    模式切换      "),
+        _c("dim", "  /compact 压缩上下文    "),
+        _c("dim", "  /clear   清空历史      "),
+        _c("dim", "  /help    命令列表      "),
         _T,
         _T,
     ]
@@ -424,8 +477,21 @@ async def main():
             elif user_input.lower() == "/clear":
                 # 切换到新会话(而非仅清空当前),让 session_id 改变
                 # 这样状态栏的 tokens/上次模型会从 0 开始
+                global _COMPACT_COUNT
+                _COMPACT_COUNT = 0
                 msg_manager.new_session()
+                session_start_time = time.time()
                 print(_c("dim", "\n  对话已清空。\n"))
+                continue
+            elif user_input.lower() == "/compact":
+                summary = await _do_compact(msg_manager)
+                if summary:
+                    print(_c("lgreen", f"\n  ✓ 上下文已压缩（{_COMPACT_COUNT}/2），摘要已存入记忆系统。\n"))
+                else:
+                    if _COMPACT_COUNT >= 2:
+                        print(_c("lyellow", "\n  ! 已达到本会话最大压缩次数（2/2）。\n"))
+                    else:
+                        print(_c("dim", "\n  ! 消息太少，无需压缩。\n"))
                 continue
             elif user_input.lower() == "/history":
                 history = msg_manager.get_messages()
@@ -504,6 +570,26 @@ async def main():
                 elapsed,
             )
             print(status_line)
+
+            # 自动压缩：上下文用量达到 60% 且未超过 2 次时触发
+            last_prompt = session_stats.get("last_prompt_tokens", 0)
+            last_model = session_stats.get("last_model") or model_name
+            max_tok = 260000 if "kimi" in last_model.lower() else 128000
+            if last_prompt / max_tok >= 0.6 and _COMPACT_COUNT < 2:
+                print()
+                compact_spinner = asyncio.Event()
+                compact_task = asyncio.create_task(_thinking_spinner(compact_spinner, interval=0.2))
+                try:
+                    summary = await _do_compact(msg_manager)
+                finally:
+                    compact_spinner.set()
+                    try:
+                        await asyncio.wait_for(compact_task, timeout=0.5)
+                    except TimeoutError:
+                        pass
+                if summary:
+                    print(_c("lyellow", f"  ⚡ 上下文已自动压缩（{_COMPACT_COUNT}/2），摘要存入记忆系统。"))
+                    print()
 
         except KeyboardInterrupt:
             print()
