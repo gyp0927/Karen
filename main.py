@@ -422,7 +422,9 @@ async def main():
                 print(_c("dim", f"\n  当前模式: {mode}\n"))
                 continue
             elif user_input.lower() == "/clear":
-                msg_manager.clear()
+                # 切换到新会话(而非仅清空当前),让 session_id 改变
+                # 这样状态栏的 tokens/上次模型会从 0 开始
+                msg_manager.new_session()
                 print(_c("dim", "\n  对话已清空。\n"))
                 continue
             elif user_input.lower() == "/history":
@@ -498,7 +500,7 @@ async def main():
             elapsed = int(time.time() - session_start_time)
             status_line = _render_status_bar(
                 session_stats.get("last_model") or model_name,
-                session_stats.get("total_tokens", 0),
+                session_stats.get("last_prompt_tokens", 0),
                 elapsed,
             )
             print(status_line)

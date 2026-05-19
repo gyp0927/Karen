@@ -149,7 +149,13 @@ def get_daily_stats(days: int = 7) -> list[dict]:
 
 
 def get_session_stats(session_id: str) -> dict:
-    """获取指定会话的累计统计（用于终端状态栏）。"""
+    """获取指定会话的累计统计（用于终端状态栏）。
+
+    返回字段:
+    - 累计: call_count, total_tokens, prompt_tokens, completion_tokens, total_cost_usd
+    - 最近一次调用: last_model, last_prompt_tokens, last_total_tokens
+      （last_prompt_tokens 代表当前上下文窗口占用,适合做进度条）
+    """
     with _lock:
         conn = _get_conn()
         cursor = conn.execute(
@@ -158,19 +164,27 @@ def get_session_stats(session_id: str) -> dict:
                 SUM(total_tokens) as total_tokens,
                 SUM(prompt_tokens) as prompt_tokens,
                 SUM(completion_tokens) as completion_tokens,
-                SUM(estimated_cost_usd) as total_cost,
-                MAX(model) as last_model
+                SUM(estimated_cost_usd) as total_cost
                FROM api_calls WHERE session_id = ?""",
             (session_id,)
         )
         row = cursor.fetchone()
+        last_cursor = conn.execute(
+            """SELECT model, prompt_tokens, total_tokens
+               FROM api_calls WHERE session_id = ?
+               ORDER BY timestamp DESC LIMIT 1""",
+            (session_id,)
+        )
+        last = last_cursor.fetchone()
         return {
             "call_count": row["call_count"] or 0,
             "total_tokens": row["total_tokens"] or 0,
             "prompt_tokens": row["prompt_tokens"] or 0,
             "completion_tokens": row["completion_tokens"] or 0,
             "total_cost_usd": round(row["total_cost"] or 0, 4),
-            "last_model": row["last_model"] or "",
+            "last_model": (last["model"] if last else "") or "",
+            "last_prompt_tokens": (last["prompt_tokens"] if last else 0) or 0,
+            "last_total_tokens": (last["total_tokens"] if last else 0) or 0,
         }
 
 
