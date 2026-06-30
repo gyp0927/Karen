@@ -4,6 +4,7 @@ import SettingsNav from "@/components/settings/SettingsNav";
 import ModelConfigPanel from "@/components/settings/ModelConfigPanel";
 import RouterConfigPanel from "@/components/settings/RouterConfigPanel";
 import PluginsPanel from "@/components/settings/PluginsPanel";
+import McpPanel from "@/components/settings/McpPanel";
 
 function Placeholder({ title }: { title: string }) {
   return (
@@ -28,7 +29,7 @@ export default function SettingsPage() {
             <Route path="models" element={<ModelConfigPanel />} />
             <Route path="router" element={<RouterConfigPanel />} />
             <Route path="plugins" element={<PluginsPanel />} />
-            <Route path="mcp" element={<Placeholder title="MCP 服务器" />} />
+            <Route path="mcp" element={<McpPanel />} />
             <Route path="rag" element={<Placeholder title="RAG / 知识库" />} />
             <Route path="cache" element={<Placeholder title="缓存" />} />
             <Route path="auth" element={<Placeholder title="用户认证" />} />
