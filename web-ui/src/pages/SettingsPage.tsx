@@ -1,6 +1,8 @@
 import { useParams, Routes, Route, Navigate } from "react-router-dom";
 import SettingsNav from "@/components/settings/SettingsNav";
 
+import ModelConfigPanel from "@/components/settings/ModelConfigPanel";
+
 function Placeholder({ title }: { title: string }) {
   return (
     <div className="flex h-full items-center justify-center text-text-soft">
@@ -21,7 +23,7 @@ export default function SettingsPage() {
         </header>
         <div className="flex-1 overflow-y-auto p-6">
           <Routes>
-            <Route path="models" element={<Placeholder title="模型配置" />} />
+            <Route path="models" element={<ModelConfigPanel />} />
             <Route path="router" element={<Placeholder title="模型路由" />} />
             <Route path="plugins" element={<Placeholder title="插件" />} />
             <Route path="mcp" element={<Placeholder title="MCP 服务器" />} />
