@@ -8,14 +8,7 @@ import McpPanel from "@/components/settings/McpPanel";
 import RagPanel from "@/components/settings/RagPanel";
 
 import CachePanel from "@/components/settings/CachePanel";
-
-function Placeholder({ title }: { title: string }) {
-  return (
-    <div className="flex h-full items-center justify-center text-text-soft">
-      <span>{title} 模块开发中</span>
-    </div>
-  );
-}
+import AuthPanel from "@/components/settings/AuthPanel";
 
 export default function SettingsPage() {
   const { section } = useParams();
@@ -35,7 +28,7 @@ export default function SettingsPage() {
             <Route path="mcp" element={<McpPanel />} />
             <Route path="rag" element={<RagPanel />} />
             <Route path="cache" element={<CachePanel />} />
-            <Route path="auth" element={<Placeholder title="用户认证" />} />
+            <Route path="auth" element={<AuthPanel />} />
             <Route path="*" element={<Navigate to="/settings/models" replace />} />
           </Routes>
         </div>
