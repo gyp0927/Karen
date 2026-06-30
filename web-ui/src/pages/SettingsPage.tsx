@@ -2,6 +2,7 @@ import { useParams, Routes, Route, Navigate } from "react-router-dom";
 import SettingsNav from "@/components/settings/SettingsNav";
 
 import ModelConfigPanel from "@/components/settings/ModelConfigPanel";
+import RouterConfigPanel from "@/components/settings/RouterConfigPanel";
 
 function Placeholder({ title }: { title: string }) {
   return (
@@ -24,7 +25,7 @@ export default function SettingsPage() {
         <div className="flex-1 overflow-y-auto p-6">
           <Routes>
             <Route path="models" element={<ModelConfigPanel />} />
-            <Route path="router" element={<Placeholder title="模型路由" />} />
+            <Route path="router" element={<RouterConfigPanel />} />
             <Route path="plugins" element={<Placeholder title="插件" />} />
             <Route path="mcp" element={<Placeholder title="MCP 服务器" />} />
             <Route path="rag" element={<Placeholder title="RAG / 知识库" />} />
