@@ -3,6 +3,7 @@ import SettingsNav from "@/components/settings/SettingsNav";
 
 import ModelConfigPanel from "@/components/settings/ModelConfigPanel";
 import RouterConfigPanel from "@/components/settings/RouterConfigPanel";
+import PluginsPanel from "@/components/settings/PluginsPanel";
 
 function Placeholder({ title }: { title: string }) {
   return (
@@ -26,7 +27,7 @@ export default function SettingsPage() {
           <Routes>
             <Route path="models" element={<ModelConfigPanel />} />
             <Route path="router" element={<RouterConfigPanel />} />
-            <Route path="plugins" element={<Placeholder title="插件" />} />
+            <Route path="plugins" element={<PluginsPanel />} />
             <Route path="mcp" element={<Placeholder title="MCP 服务器" />} />
             <Route path="rag" element={<Placeholder title="RAG / 知识库" />} />
             <Route path="cache" element={<Placeholder title="缓存" />} />
