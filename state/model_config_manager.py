@@ -2,16 +2,87 @@ import json
 import os
 import threading
 import uuid
+from base64 import urlsafe_b64decode as b64decode, urlsafe_b64encode as b64encode
 from datetime import datetime
 from typing import cast
 
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
 _CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state")
 _CONFIG_FILE = os.path.join(_CONFIG_DIR, "model_configs.json")
+_KEY_FILE = os.path.join(_CONFIG_DIR, ".model_configs_key")
 
 # 内存缓存：避免每次读配置都打开文件
 _cache_lock = threading.Lock()
 _cache_data: dict | None = None
 _cache_mtime: float = 0.0
+
+
+def _derive_key(password: str | None = None, salt: bytes | None = None) -> tuple[bytes, bytes]:
+    """用 PBKDF2 从机器相关数据派生加密密钥。"""
+    if salt is None:
+        salt = os.urandom(16)
+    if password is None:
+        # 用机器名 + 用户名 + 项目路径作为默认密码，保证同一台机器能解密。
+        try:
+            login = os.getlogin()
+        except OSError:
+            login = "user"
+        password = f"{login}@{os.environ.get('COMPUTERNAME', '')}:{_CONFIG_DIR}"
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100_000,
+    )
+    key = b64encode(kdf.derive(password.encode("utf-8")))
+    return key, salt
+
+
+def _get_fernet() -> Fernet:
+    """获取或创建 Fernet 实例。"""
+    salt: bytes | None = None
+    if os.path.exists(_KEY_FILE):
+        try:
+            with open(_KEY_FILE, "rb") as f:
+                salt = f.read()
+        except OSError:
+            pass
+    key, salt = _derive_key(salt=salt)
+    if salt is not None:
+        with open(_KEY_FILE, "wb") as f:
+            f.write(salt)
+    return Fernet(key)
+
+
+def _encrypt(value: str) -> str:
+    """加密字符串，返回 base64 编码的密文。"""
+    if not value:
+        return value
+    try:
+        return _get_fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+    except Exception as e:
+        # 加密失败时不应阻塞业务，但应该记录。
+        import logging
+
+        logging.getLogger(__name__).warning(f"Encryption failed: {e}")
+        return value
+
+
+def _decrypt(value: str) -> str:
+    """解密 _encrypt 生成的密文。"""
+    if not value:
+        return value
+    try:
+        return _get_fernet().decrypt(value.encode("utf-8")).decode("utf-8")
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(f"Decryption failed: {e}")
+        # 解密失败可能是旧版明文数据，直接返回原值，兼容迁移。
+        return value
 
 
 def _ensure_file():
@@ -63,7 +134,7 @@ def list_configs() -> list[dict]:
     for c in data.get("configs", []):
         cfg = dict(c)
         if cfg.get("apiKey"):
-            cfg["apiKey"] = _mask_key(cfg["apiKey"])
+            cfg["apiKey"] = _mask_key(_decrypt(cfg["apiKey"]))
         configs.append(cfg)
     return configs
 
@@ -71,7 +142,13 @@ def list_configs() -> list[dict]:
 def list_configs_full() -> list[dict]:
     """获取所有配置列表（包含完整 API Key，仅后端使用）"""
     data = _load_data()
-    return cast(list[dict], data.get("configs", []))
+    configs = []
+    for c in data.get("configs", []):
+        cfg = dict(c)
+        if cfg.get("apiKey"):
+            cfg["apiKey"] = _decrypt(cfg["apiKey"])
+        configs.append(cfg)
+    return configs
 
 
 def get_config(config_id: str) -> dict | None:
@@ -79,7 +156,10 @@ def get_config(config_id: str) -> dict | None:
     data = _load_data()
     for c in data.get("configs", []):
         if c.get("id") == config_id:
-            return dict(c)
+            cfg = dict(c)
+            if cfg.get("apiKey"):
+                cfg["apiKey"] = _decrypt(cfg["apiKey"])
+            return cfg
     return None
 
 
@@ -91,23 +171,40 @@ def get_active_config() -> dict | None:
         # 如果没有活跃配置，返回第一个
         configs = data.get("configs", [])
         if configs:
-            return dict(configs[0])
+            cfg = dict(configs[0])
+            if cfg.get("apiKey"):
+                cfg["apiKey"] = _decrypt(cfg["apiKey"])
+            return cfg
         return None
     for c in data.get("configs", []):
         if c.get("id") == active_id:
-            return dict(c)
+            cfg = dict(c)
+            if cfg.get("apiKey"):
+                cfg["apiKey"] = _decrypt(cfg["apiKey"])
+            return cfg
     return None
 
 
 def add_config(name: str, provider: str, model: str, api_key: str, base_url: str = "") -> dict:
     """新增一个配置"""
     data = _load_data()
+    encrypted_key = _encrypt(api_key)
+    # 如果同名同 provider 同 model 已存在，直接更新旧配置而不是新增
+    for c in data.get("configs", []):
+        if c.get("name") == name and c.get("provider") == provider and c.get("model") == model:
+            c["apiKey"] = encrypted_key
+            if base_url:
+                c["baseUrl"] = base_url
+            _save_data(data)
+            result = dict(c)
+            result["apiKey"] = _mask_key(api_key)
+            return result
     config = {
         "id": str(uuid.uuid4())[:8],
         "name": name,
         "provider": provider,
         "model": model,
-        "apiKey": api_key,
+        "apiKey": encrypted_key,
         "baseUrl": base_url,
         "createdAt": datetime.now().isoformat(),
     }
@@ -118,7 +215,7 @@ def add_config(name: str, provider: str, model: str, api_key: str, base_url: str
     _save_data(data)
     # 返回脱敏版本
     result = dict(config)
-    result["apiKey"] = _mask_key(result["apiKey"])
+    result["apiKey"] = _mask_key(api_key)
     return result
 
 
@@ -129,10 +226,14 @@ def update_config(config_id: str, **kwargs) -> dict | None:
         if c.get("id") == config_id:
             for key in ["name", "provider", "model", "apiKey", "baseUrl"]:
                 if key in kwargs:
-                    c[key] = kwargs[key]
+                    value = kwargs[key]
+                    if key == "apiKey":
+                        value = _encrypt(value)
+                    c[key] = value
             _save_data(data)
             result = dict(c)
-            result["apiKey"] = _mask_key(result["apiKey"])
+            if result.get("apiKey"):
+                result["apiKey"] = _mask_key(_decrypt(result["apiKey"]))
             return result
     return None
 
@@ -177,7 +278,6 @@ def sync_to_env(config: dict):
     """将配置同步到环境变量和 .env 文件（兼容旧系统）"""
     import os
 
-
     provider = config.get("provider", "ollama")
     model = config.get("model", "")
     api_key = config.get("apiKey", "")
@@ -202,20 +302,10 @@ def sync_to_env(config: dict):
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     existing[k] = v
-
-    existing["LLM_PROVIDER"] = provider
-    existing["LLM_BASE_URL"] = base_url
-    existing["LLM_MODEL_NAME"] = model
     existing[key_env_name] = api_key
-    existing.pop("LLM_API_KEY", None)
-
-    lines = ["# LLM 配置\n"]
-    for k, v in existing.items():
-        lines.append(f"{k}={v}\n")
-
+    existing["LLM_PROVIDER"] = provider
+    existing["LLM_MODEL_NAME"] = model
+    existing["LLM_BASE_URL"] = base_url
     with open(env_path, "w", encoding="utf-8") as f:
-        f.writelines(lines)
-    try:
-        os.chmod(env_path, 0o600)
-    except Exception:
-        pass
+        for k, v in existing.items():
+            f.write(f"{k}={v}\n")

@@ -41,7 +41,10 @@ export default function ChatPage() {
         onNew={actions.newSession}
         onSwitch={actions.switchSession}
         onDelete={actions.deleteSession}
-        onManage={() => navigate("/config")}
+        onManage={() => {
+          // TODO: navigate to a real management page once it exists.
+          // For now, avoid redirecting away from the chat page.
+        }}
         onPickModel={() => setShowModelSwitcher(true)}
       />
       <main className="flex flex-1 flex-col">
@@ -66,7 +69,7 @@ export default function ChatPage() {
               <h1 className="bg-gradient-to-r from-accent to-violet bg-clip-text text-3xl font-semibold text-transparent">
                 我是凯伦，你想问什么？
               </h1>
-              <p className="mt-3 text-sm text-text-soft">支持多模型、联网搜索、RAG 知识库、代码执行</p>
+              <p className="mt-3 text-sm text-text-soft"></p>
             </div>
           ) : (
             <div className="mx-auto max-w-content py-4">

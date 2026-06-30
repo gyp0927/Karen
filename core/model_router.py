@@ -373,21 +373,27 @@ class ModelRouter:
         }
         self.save_tiers()
 
-    def get_tier_config(self, tier: str) -> dict:
+    def get_tier_config(self, tier: str, user_cfg: dict | None = None) -> dict:
         """获取指定档位的模型配置。
 
         如果配置文件中 apiKey 为空，按优先级尝试：
-        1. 环境变量 LLM_API_KEY_{PROVIDER}
-        2. 环境变量 LLM_API_KEY（通用）
+        1. 传入的当前用户 socket 配置中的同 provider apiKey
+        2. 环境变量 LLM_API_KEY_{PROVIDER}
+        3. 环境变量 LLM_API_KEY（通用）
         """
         self._load_tiers()  # 自动刷新缓存
         cfg = self._tiers.get(tier, self._tiers["default"]).copy()
         if not cfg.get("apiKey"):
-            provider = cfg.get("provider", "")
-            env_var = f"LLM_API_KEY_{provider.upper().replace('-', '_')}"
-            env_key = os.getenv(env_var) or os.getenv("LLM_API_KEY")
-            if env_key:
-                cfg["apiKey"] = env_key
+            tier_provider = cfg.get("provider", "").lower()
+            if user_cfg and str(user_cfg.get("provider") or "").lower() == tier_provider:
+                user_key = user_cfg.get("apiKey") or user_cfg.get("api_key")
+                if user_key:
+                    cfg["apiKey"] = user_key
+            if not cfg.get("apiKey"):
+                env_var = f"LLM_API_KEY_{tier_provider.upper().replace('-', '_')}"
+                env_key = os.getenv(env_var) or os.getenv("LLM_API_KEY")
+                if env_key:
+                    cfg["apiKey"] = env_key
         return cast(dict, cfg)
 
     def get_all_tiers(self) -> dict:
@@ -453,6 +459,37 @@ class ModelRouter:
             logger.info("Powerful tier apiKey not configured, falling back to default.")
             tier = "default"
             config = self.get_tier_config(tier)
+
+        logger.info(f"Model routing: tier={tier}, score={analysis['score']}")
+
+        return {
+            "tier": tier,
+            "config": config,
+            "analysis": analysis,
+        }
+
+    def route_with_user_config(self, user_message: str, history_turns: int = 0, user_cfg: dict | None = None) -> dict:
+        """同 route(), 但允许传入当前用户配置用于 key 继承。"""
+        if not self.enabled:
+            return {
+                "tier": "default",
+                "config": self.get_tier_config("default", user_cfg=user_cfg),
+                "analysis": {"score": 0, "tier": "default", "factors": {}},
+            }
+
+        analysis = self.analyzer.analyze(user_message, history_turns)
+        tier = analysis["tier"]
+
+        if tier == "powerful" and not self._is_coding_intent(user_message):
+            logger.info("Powerful tier requested but non-coding intent detected, downgrading to default.")
+            tier = "default"
+
+        config = self.get_tier_config(tier, user_cfg=user_cfg)
+
+        if tier == "powerful" and not config.get("apiKey"):
+            logger.info("Powerful tier apiKey not configured, falling back to default.")
+            tier = "default"
+            config = self.get_tier_config(tier, user_cfg=user_cfg)
 
         logger.info(f"Model routing: tier={tier}, score={analysis['score']}")
 

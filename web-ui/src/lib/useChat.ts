@@ -252,7 +252,9 @@ export function useChat() {
 
     const onConnect = () => {
       const cfg = loadUserConfig();
-      if (cfg) s.emit("set_user_config", cfg);
+      if (cfg) {
+        s.emit("set_user_config", cfg);
+      }
       s.emit("get_sessions");
       s.emit("get_model_info");
     };

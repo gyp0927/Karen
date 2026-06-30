@@ -121,7 +121,7 @@ _cors_origins = [o.strip() for o in _CORS_ORIGINS_ENV.split(",") if o.strip()] o
     "http://127.0.0.1:5173",
 ]
 CORS(app, origins=_cors_origins)
-socketio = SocketIO(app, cors_allowed_origins=_cors_origins, async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins=["*"], async_mode="threading")
 
 # 注册 API Blueprint（必须放在 if __name__ 之前，确保 WSGI 入口和 __main__ 入口行为一致）
 from web.api import api_bp  # noqa: E402
@@ -515,7 +515,7 @@ def handle_message(data):
         if router.enabled:
             history = state.msg_manager.get_messages()
             history_turns = len(history) // 2
-            route_result = router.route(user_message, history_turns)
+            route_result = router.route_with_user_config(user_message, history_turns, user_cfg=user_cfg)
             if route_result["tier"] != "default":
                 routed_cfg = _apply_route_config(user_cfg, route_result["config"], route_result["tier"])
                 if routed_cfg != user_cfg:
@@ -1253,6 +1253,12 @@ def _apply_route_config(user_cfg: dict | None, tier_config: dict, tier: str) -> 
         )
         return user_cfg
 
+    # 同 provider 但 tier 没有自己的 key：继承用户 key 和 baseUrl
+    if same_provider and not tier_api_key:
+        tier_api_key = routed_cfg.get("apiKey") or routed_cfg.get("api_key") or ""
+        if not tier_base_url:
+            tier_base_url = routed_cfg.get("baseUrl") or routed_cfg.get("base_url") or ""
+
     routed_cfg["provider"] = tier_provider
     routed_cfg["model"] = tier_model
     routed_cfg["name"] = f"{PROVIDER_NAMES.get(tier_provider, tier_provider)} · {tier_model}"
@@ -1430,6 +1436,15 @@ def handle_set_user_config(data):
 
     _web_state.set_socket_config(sid, cfg)
     set_current_llm_config(cfg, sid)
+
+    # 同步保存到全局配置列表，使模型选择器可以看到该配置
+    try:
+        from state.model_config_manager import add_config, set_active_config
+
+        saved = add_config(name=name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}", provider=provider, model=model, api_key=api_key, base_url=base_url)
+        set_active_config(saved["id"])
+    except Exception as e:
+        logger.warning(f"Failed to save user config to global configs: {e}")
 
     # 清除 LLM 实例缓存，使下次 get_llm(sid) 使用新配置创建实例
     logger.info("User config: api_key=...%s, base_url=%s, provider=%s, model=%s", api_key[-4:], base_url, provider, model)

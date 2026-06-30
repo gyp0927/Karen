@@ -8,11 +8,11 @@ export type KarenSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 // Flask-SocketIO's threading mode).  Production: same-origin relative path.
 const _SERVER = import.meta.env.DEV ? "http://127.0.0.1:5000" : undefined;
 
-const STORAGE_KEY = "user_llm_config";
+const STORAGE_KEY = "karen_user_llm_config";
 
 export function loadUserConfig(): UserLLMConfig | null {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? (JSON.parse(raw) as UserLLMConfig) : null;
   } catch {
     return null;
@@ -20,16 +20,15 @@ export function loadUserConfig(): UserLLMConfig | null {
 }
 
 export function saveUserConfig(cfg: UserLLMConfig | null): void {
-  if (cfg) sessionStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
-  else sessionStorage.removeItem(STORAGE_KEY);
+  if (cfg) localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+  else localStorage.removeItem(STORAGE_KEY);
 }
 
 let _socket: KarenSocket | null = null;
 
 export function getSocket(): KarenSocket {
   if (_socket) return _socket;
-  _socket = io({
-    ...(_SERVER ? { url: _SERVER } : {}),
+  _socket = io(_SERVER, {
     reconnectionAttempts: 1,
     reconnectionDelay: 1000,
   }) as KarenSocket;

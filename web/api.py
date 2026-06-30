@@ -276,7 +276,7 @@ def save_config_api():
         if not name:
             return {"success": False, "message": "请填写配置名称"}, 400
 
-        base_url = BASE_URLS.get(provider, BASE_URLS.get("ollama", ""))
+        base_url = data.get("baseUrl") or data.get("base_url") or BASE_URLS.get(provider, BASE_URLS.get("ollama", ""))
 
         if config_id:
             result = update_config(

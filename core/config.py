@@ -99,7 +99,7 @@ def list_providers() -> list[str]:
 
 # 国内外大模型厂商配置
 PROVIDER_CONFIG = {
-    "deepseek": {"base_url": "https://api.deepseek.com/v1", "default_model": "deepseek-chat"},
+    "deepseek": {"base_url": "https://api.deepseek.com", "default_model": "deepseek-chat"},
     "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "default_model": "qwen-plus"},
     "minimax": {"base_url": "https://api.minimax.chat/v1", "default_model": "MiniMax-Text-01"},
     "doubao": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "default_model": "doubao-pro-32k"},

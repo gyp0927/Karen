@@ -1,16 +1,16 @@
 {
   "light": {
-    "provider": "siliconflow",
-    "model": "Pro/deepseek-ai/DeepSeek-V3.2",
+    "provider": "deepseek",
+    "model": "deepseek-chat",
     "apiKey": "",
-    "baseUrl": "https://api.siliconflow.cn/v1",
+    "baseUrl": "https://api.deepseek.com",
     "description": "轻量模型（简单问答、问候）"
   },
   "default": {
-    "provider": "siliconflow",
-    "model": "Pro/deepseek-ai/DeepSeek-V3.2",
+    "provider": "deepseek",
+    "model": "deepseek-chat",
     "apiKey": "",
-    "baseUrl": "https://api.siliconflow.cn/v1",
+    "baseUrl": "https://api.deepseek.com",
     "description": "默认模型（一般问题）"
   },
   "powerful": {

@@ -51,6 +51,8 @@ state/*.sqlite3
 *.sqlite3
 qdrant_storage/
 state/model_configs.json
+state/model_configs.json.bak
+state/.model_configs_key
 data/.secret_key
 data/.admin_password
 .app.lock
