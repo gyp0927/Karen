@@ -73,6 +73,7 @@ export default function ModelConfigPanel() {
     setLoading(true);
     try {
       const res = await api.post<{ success: boolean; message: string }>("/api/configs/test", {
+        id: cfg.id,
         provider: cfg.provider,
         model: cfg.model,
         apiKey: cfg.apiKey || "",

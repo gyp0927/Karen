@@ -2,17 +2,14 @@ import json
 import os
 import threading
 import uuid
-from base64 import urlsafe_b64decode as b64decode, urlsafe_b64encode as b64encode
 from datetime import datetime
 from typing import cast
 
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import keyring
 
 _CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state")
 _CONFIG_FILE = os.path.join(_CONFIG_DIR, "model_configs.json")
-_KEY_FILE = os.path.join(_CONFIG_DIR, ".model_configs_key")
+_KEYRING_SERVICE = "karen-ai-model-config"
 
 # 内存缓存：避免每次读配置都打开文件
 _cache_lock = threading.Lock()
@@ -20,69 +17,123 @@ _cache_data: dict | None = None
 _cache_mtime: float = 0.0
 
 
-def _derive_key(password: str | None = None, salt: bytes | None = None) -> tuple[bytes, bytes]:
-    """用 PBKDF2 从机器相关数据派生加密密钥。"""
-    if salt is None:
-        salt = os.urandom(16)
-    if password is None:
-        # 用机器名 + 用户名 + 项目路径作为默认密码，保证同一台机器能解密。
+def _keyring_username(config_id: str) -> str:
+    """生成 keyring 条目用户名。"""
+    return f"config-{config_id}"
+
+
+def _store_api_key(config_id: str, api_key: str) -> None:
+    """将 API Key 存入系统密钥环。"""
+    if not api_key:
+        _remove_api_key(config_id)
+        return
+    try:
+        keyring.set_password(_KEYRING_SERVICE, _keyring_username(config_id), api_key)
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(f"Failed to store API key in keyring: {e}")
+        raise
+
+
+def _load_api_key(config_id: str) -> str:
+    """从系统密钥环读取 API Key；读取失败返回空字符串。"""
+    try:
+        value = keyring.get_password(_KEYRING_SERVICE, _keyring_username(config_id))
+        return value or ""
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(f"Failed to load API key from keyring: {e}")
+        return ""
+
+
+def _remove_api_key(config_id: str) -> None:
+    """从系统密钥环删除 API Key。"""
+    try:
+        keyring.delete_password(_KEYRING_SERVICE, _keyring_username(config_id))
+    except keyring.errors.PasswordDeleteError:
+        pass
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(f"Failed to remove API key from keyring: {e}")
+
+
+def _migrate_legacy_encrypted_key(config_id: str, encrypted_value: str) -> str:
+    """兼容旧版 Fernet 加密：尝试解密并迁移到 keyring。
+
+    解密失败时返回原值（可能是旧版明文），调用方自行处理。
+    """
+    if not encrypted_value:
+        return ""
+    # 如果值看起来不是 Fernet 密文（长度太短或不含 Fernet 前缀），直接返回
+    if len(encrypted_value) < 20 or not encrypted_value.startswith("gAAAA"):
+        return encrypted_value
+    try:
+        from base64 import urlsafe_b64encode as b64encode
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+        _LEGACY_KEY_FILE = os.path.join(_CONFIG_DIR, ".model_configs_key")
+        salt = None
+        if os.path.exists(_LEGACY_KEY_FILE):
+            with open(_LEGACY_KEY_FILE, "rb") as f:
+                salt = f.read()
+        if salt is None:
+            return encrypted_value
         try:
             login = os.getlogin()
         except OSError:
             login = "user"
         password = f"{login}@{os.environ.get('COMPUTERNAME', '')}:{_CONFIG_DIR}"
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=100_000,
-    )
-    key = b64encode(kdf.derive(password.encode("utf-8")))
-    return key, salt
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100_000)
+        key = b64encode(kdf.derive(password.encode("utf-8")))
+        decrypted = Fernet(key).decrypt(encrypted_value.encode("utf-8")).decode("utf-8")
+        # 解密成功后迁移到 keyring，并清空配置文件中的密文字段
+        _store_api_key(config_id, decrypted)
+        return decrypted
+    except Exception:
+        return encrypted_value
 
 
-def _get_fernet() -> Fernet:
-    """获取或创建 Fernet 实例。"""
-    salt: bytes | None = None
-    if os.path.exists(_KEY_FILE):
-        try:
-            with open(_KEY_FILE, "rb") as f:
-                salt = f.read()
-        except OSError:
-            pass
-    key, salt = _derive_key(salt=salt)
-    if salt is not None:
-        with open(_KEY_FILE, "wb") as f:
-            f.write(salt)
-    return Fernet(key)
+def _with_api_key(cfg: dict) -> dict:
+    """将配置文件中的 apiKey 字段替换为 keyring 里的真实值。"""
+    config_id = cfg.get("id")
+    if not config_id:
+        return cfg
+    stored = cfg.get("apiKey", "")
+    # 优先从 keyring 读取
+    key = _load_api_key(config_id)
+    if key:
+        cfg["apiKey"] = key
+        return cfg
+    # keyring 没有，尝试兼容旧版加密
+    if stored:
+        migrated = _migrate_legacy_encrypted_key(config_id, stored)
+        if migrated and migrated != stored:
+            # 迁移成功：持久化到 keyring，并清空文件中的密文
+            cfg["apiKey"] = migrated
+            _store_api_key(config_id, migrated)
+            stored_cfg = cfg.copy()
+            stored_cfg["apiKey"] = ""
+            _update_config_in_place(stored_cfg)
+        else:
+            # 旧版密文无法解密（可能已损坏或环境变化），返回空字符串，
+            # 避免前端把密文当真实 key 使用或显示误导性的脱敏值。
+            cfg["apiKey"] = ""
+    return cfg
 
 
-def _encrypt(value: str) -> str:
-    """加密字符串，返回 base64 编码的密文。"""
-    if not value:
-        return value
-    try:
-        return _get_fernet().encrypt(value.encode("utf-8")).decode("utf-8")
-    except Exception as e:
-        # 加密失败时不应阻塞业务，但应该记录。
-        import logging
-
-        logging.getLogger(__name__).warning(f"Encryption failed: {e}")
-        return value
-
-
-def _decrypt(value: str) -> str:
-    """解密 _encrypt 生成的密文。"""
-    if not value:
-        return value
-    try:
-        return _get_fernet().decrypt(value.encode("utf-8")).decode("utf-8")
-    except Exception as e:
-        import logging
-
-        logging.getLogger(__name__).warning(f"Decryption failed: {e}")
-        # 解密失败可能是旧版明文数据，直接返回原值，兼容迁移。
-        return value
+def _update_config_in_place(updated: dict) -> None:
+    """用更新后的配置替换文件中的同 id 配置。"""
+    data = _load_data()
+    for i, c in enumerate(data.get("configs", [])):
+        if c.get("id") == updated.get("id"):
+            data["configs"][i] = updated
+            _save_data(data)
+            return
 
 
 def _ensure_file():
@@ -133,8 +184,9 @@ def list_configs() -> list[dict]:
     configs = []
     for c in data.get("configs", []):
         cfg = dict(c)
+        cfg = _with_api_key(cfg)
         if cfg.get("apiKey"):
-            cfg["apiKey"] = _mask_key(_decrypt(cfg["apiKey"]))
+            cfg["apiKey"] = _mask_key(cfg["apiKey"])
         configs.append(cfg)
     return configs
 
@@ -145,8 +197,7 @@ def list_configs_full() -> list[dict]:
     configs = []
     for c in data.get("configs", []):
         cfg = dict(c)
-        if cfg.get("apiKey"):
-            cfg["apiKey"] = _decrypt(cfg["apiKey"])
+        cfg = _with_api_key(cfg)
         configs.append(cfg)
     return configs
 
@@ -157,8 +208,7 @@ def get_config(config_id: str) -> dict | None:
     for c in data.get("configs", []):
         if c.get("id") == config_id:
             cfg = dict(c)
-            if cfg.get("apiKey"):
-                cfg["apiKey"] = _decrypt(cfg["apiKey"])
+            cfg = _with_api_key(cfg)
             return cfg
     return None
 
@@ -172,15 +222,13 @@ def get_active_config() -> dict | None:
         configs = data.get("configs", [])
         if configs:
             cfg = dict(configs[0])
-            if cfg.get("apiKey"):
-                cfg["apiKey"] = _decrypt(cfg["apiKey"])
+            cfg = _with_api_key(cfg)
             return cfg
         return None
     for c in data.get("configs", []):
         if c.get("id") == active_id:
             cfg = dict(c)
-            if cfg.get("apiKey"):
-                cfg["apiKey"] = _decrypt(cfg["apiKey"])
+            cfg = _with_api_key(cfg)
             return cfg
     return None
 
@@ -188,31 +236,32 @@ def get_active_config() -> dict | None:
 def add_config(name: str, provider: str, model: str, api_key: str, base_url: str = "") -> dict:
     """新增一个配置"""
     data = _load_data()
-    encrypted_key = _encrypt(api_key)
     # 如果同名同 provider 同 model 已存在，直接更新旧配置而不是新增
     for c in data.get("configs", []):
         if c.get("name") == name and c.get("provider") == provider and c.get("model") == model:
-            c["apiKey"] = encrypted_key
+            _store_api_key(c["id"], api_key)
             if base_url:
                 c["baseUrl"] = base_url
             _save_data(data)
             result = dict(c)
             result["apiKey"] = _mask_key(api_key)
             return result
+    config_id = str(uuid.uuid4())[:8]
     config = {
-        "id": str(uuid.uuid4())[:8],
+        "id": config_id,
         "name": name,
         "provider": provider,
         "model": model,
-        "apiKey": encrypted_key,
+        "apiKey": "",
         "baseUrl": base_url,
         "createdAt": datetime.now().isoformat(),
     }
     data["configs"].append(config)
     # 如果是第一个配置，自动设为活跃
     if len(data["configs"]) == 1:
-        data["activeConfigId"] = config["id"]
+        data["activeConfigId"] = config_id
     _save_data(data)
+    _store_api_key(config_id, api_key)
     # 返回脱敏版本
     result = dict(config)
     result["apiKey"] = _mask_key(api_key)
@@ -224,16 +273,21 @@ def update_config(config_id: str, **kwargs) -> dict | None:
     data = _load_data()
     for c in data.get("configs", []):
         if c.get("id") == config_id:
+            api_key = None
             for key in ["name", "provider", "model", "apiKey", "baseUrl"]:
                 if key in kwargs:
                     value = kwargs[key]
                     if key == "apiKey":
-                        value = _encrypt(value)
-                    c[key] = value
+                        api_key = value
+                    else:
+                        c[key] = value
             _save_data(data)
+            if api_key is not None:
+                _store_api_key(config_id, api_key)
             result = dict(c)
+            result = _with_api_key(result)
             if result.get("apiKey"):
-                result["apiKey"] = _mask_key(_decrypt(result["apiKey"]))
+                result["apiKey"] = _mask_key(result["apiKey"])
             return result
     return None
 
@@ -245,6 +299,7 @@ def delete_config(config_id: str) -> bool:
     for i, c in enumerate(configs):
         if c.get("id") == config_id:
             configs.pop(i)
+            _remove_api_key(config_id)
             # 如果删除的是活跃配置，重新设置活跃配置
             if data.get("activeConfigId") == config_id:
                 if configs:

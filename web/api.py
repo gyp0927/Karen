@@ -45,6 +45,7 @@ from state.model_config_manager import (  # noqa: E402
     add_config,
     delete_config,
     get_active_config,
+    get_config as _get_config_by_id,
     list_configs,
     list_configs_full,
     set_active_config,
@@ -361,6 +362,13 @@ def test_config_api():
         provider = data.get("provider", "ollama")
         model = data.get("model", "")
         api_key = data.get("apiKey", "")
+        config_id = data.get("id", "")
+
+        # 如果提供了配置 ID 且没有提供真实 API Key，尝试从配置文件中读取完整 Key
+        if config_id and (not api_key or "****" in api_key):
+            cfg = _get_config_by_id(config_id)
+            if cfg and cfg.get("apiKey"):
+                api_key = cfg["apiKey"]
 
         if provider == "ollama":
             import requests

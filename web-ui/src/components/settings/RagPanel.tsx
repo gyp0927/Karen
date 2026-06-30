@@ -2,8 +2,14 @@ import { useEffect, useState } from "react";
 import { Save } from "lucide-react";
 import { api } from "@/lib/api";
 
+interface Backend {
+  name: string;
+  description: string;
+  available: boolean;
+}
+
 export default function RagPanel() {
-  const [backends, setBackends] = useState<string[]>([]);
+  const [backends, setBackends] = useState<Backend[]>([]);
   const [current, setCurrent] = useState<string>("");
   const [selected, setSelected] = useState<string>("");
   const [persistPath, setPersistPath] = useState<string>("");
@@ -11,7 +17,7 @@ export default function RagPanel() {
 
   const fetchBackends = async () => {
     try {
-      const res = await api.get<{ backends: string[]; current: string }>("/api/rag/backends");
+      const res = await api.get<{ backends: Backend[]; current: string }>("/api/rag/backends");
       setBackends(res.backends || []);
       setCurrent(res.current || "");
       setSelected(res.current || "");
@@ -56,8 +62,8 @@ export default function RagPanel() {
             className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
           >
             {backends.map((b) => (
-              <option key={b} value={b}>
-                {b}
+              <option key={b.name} value={b.name} disabled={!b.available}>
+                {b.name}{b.description ? ` — ${b.description}` : ""}
               </option>
             ))}
           </select>
