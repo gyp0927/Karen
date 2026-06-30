@@ -16,8 +16,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -57,12 +57,14 @@ data/.admin_password
 
 # 构建产物
 *.spec
+node_modules/
 
 # 生成的文件
 web/generated_files/
 
 # 日志
 *.log
+*.err
 logs/
 
 # Windows 批处理文件

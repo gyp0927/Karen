@@ -43,15 +43,29 @@ def get_provider() -> str:
 
 
 def get_api_key(provider: str | None = None) -> str:
-    """获取指定提供商的 API Key，各提供商完全隔离"""
+    """获取指定提供商的 API Key，各提供商完全隔离。"""
     cfg = _get_active_config()
-    p = (provider or (cfg.get("provider", "") if cfg else get_provider())).lower()
+    requested_provider = provider.lower() if provider else None
+    cfg_provider = cast(str, cfg.get("provider", "")).lower() if cfg else ""
+    p = requested_provider or cfg_provider or get_provider()
     if p == "ollama":
         return "ollama"
 
-    key = _get_config_value(cfg, "apiKey", f"LLM_API_KEY_{p.upper().replace('-', '_')}")
-    if key:
-        return key
+    if cfg and (requested_provider is None or cfg_provider == p):
+        key = cast(str, cfg.get("apiKey", ""))
+        if key:
+            return key
+
+    env_key = os.getenv(f"LLM_API_KEY_{p.upper().replace('-', '_')}", "")
+    if env_key:
+        return env_key
+
+    # 兼容旧版 .env：未显式请求 provider 时才允许通用 LLM_API_KEY。
+    if requested_provider is None:
+        env_key = os.getenv("LLM_API_KEY", "")
+        if env_key:
+            return env_key
+
     raise ValueError(f"API Key not set for provider '{p}'")
 
 

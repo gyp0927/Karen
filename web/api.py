@@ -3,6 +3,7 @@
 import ast
 import logging
 import os
+import pathlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -61,6 +62,10 @@ def index():
         api_key = request.cookies.get("api_key", "")
         if not api_key or not authenticate(api_key):
             return redirect("/login")
+    # New UI from Vite build; fall back to old Flask template when dist is missing.
+    dist_index = pathlib.Path(__file__).resolve().parent / "static" / "dist" / "index.html"
+    if dist_index.exists():
+        return send_file(str(dist_index))
     return render_template("index.html")
 
 

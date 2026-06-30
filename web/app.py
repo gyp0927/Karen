@@ -114,7 +114,12 @@ app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 10
 
 # CORS 与 SocketIO origin 白名单 - 默认 localhost,生产环境需通过 CORS_ORIGINS 显式开放
 _CORS_ORIGINS_ENV = os.getenv("CORS_ORIGINS", "http://localhost:5000,http://127.0.0.1:5000")
-_cors_origins = [o.strip() for o in _CORS_ORIGINS_ENV.split(",") if o.strip()] or ["http://localhost:5000"]
+_cors_origins = [o.strip() for o in _CORS_ORIGINS_ENV.split(",") if o.strip()] or [
+    "http://localhost:5000",
+    "http://127.0.0.1:5000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 CORS(app, origins=_cors_origins)
 socketio = SocketIO(app, cors_allowed_origins=_cors_origins, async_mode="threading")
 
@@ -502,8 +507,7 @@ def handle_message(data):
     expected_session_id = state.msg_manager.get_current_session_id()
 
     # 注入当前 socket 的 LLM 配置
-    with _socket_configs_lock:
-        user_cfg = socket_configs.get(sid)
+    user_cfg = _get_effective_llm_config(sid)
 
     # 模型路由：根据问题复杂度选择模型档位
     try:
@@ -513,28 +517,17 @@ def handle_message(data):
             history_turns = len(history) // 2
             route_result = router.route(user_message, history_turns)
             if route_result["tier"] != "default":
-                tier_config = route_result["config"]
-                # 合并路由配置到用户配置
-                routed_cfg = dict(user_cfg) if user_cfg else {}
-                routed_cfg.update(
-                    {
-                        "provider": tier_config.get("provider", routed_cfg.get("provider", "ollama")),
-                        "model": tier_config.get("model", routed_cfg.get("model", "")),
-                    }
-                )
-                if tier_config.get("apiKey"):
-                    routed_cfg["apiKey"] = tier_config["apiKey"]
-                if tier_config.get("baseUrl"):
-                    routed_cfg["baseUrl"] = tier_config["baseUrl"]
-                user_cfg = routed_cfg
-                logger.info(f"Model routed to tier={route_result['tier']} for sid={sid}")
-                emit(
-                    "model_routed",
-                    {
-                        "tier": route_result["tier"],
-                        "score": route_result["analysis"]["score"],
-                    },
-                )
+                routed_cfg = _apply_route_config(user_cfg, route_result["config"], route_result["tier"])
+                if routed_cfg != user_cfg:
+                    user_cfg = routed_cfg
+                    logger.info(f"Model routed to tier={route_result['tier']} for sid={sid}")
+                    emit(
+                        "model_routed",
+                        {
+                            "tier": route_result["tier"],
+                            "score": route_result["analysis"]["score"],
+                        },
+                    )
     except (OSError, ValueError) as e:
         logger.warning(f"Model routing failed, using default config: {e}")
 
@@ -1202,6 +1195,78 @@ def format_size(bytes_size):
     return f"{bytes_size:.1f}PB"
 
 
+def _normalize_llm_config(data: dict | None) -> dict:
+    """规范化 LLM 配置字段，兼容前后端不同命名。"""
+    data = data or {}
+    provider = str(data.get("provider") or "ollama").lower()
+    model = str(data.get("model") or "")
+    api_key = str(data.get("apiKey") or data.get("api_key") or "")
+    base_url = str(data.get("baseUrl") or data.get("base_url") or BASE_URLS.get(provider, ""))
+    if not base_url and provider == "ollama":
+        base_url = "http://localhost:11434/v1"
+    name = str(data.get("name") or f"{PROVIDER_NAMES.get(provider, provider)} · {model}")
+    return {
+        "provider": provider,
+        "model": model,
+        "apiKey": api_key,
+        "baseUrl": base_url,
+        "name": name,
+    }
+
+
+def _get_effective_llm_config(sid: str) -> dict | None:
+    """返回当前 socket 实际应使用的配置，并把全局回退物化为 socket 配置。"""
+    with _socket_configs_lock:
+        cfg = socket_configs.get(sid)
+    if cfg:
+        return _normalize_llm_config(cfg)
+
+    active = get_active_config()
+    if active:
+        normalized = _normalize_llm_config(active)
+        _web_state.set_socket_config(sid, normalized)
+        return normalized
+    return None
+
+
+def _apply_route_config(user_cfg: dict | None, tier_config: dict, tier: str) -> dict | None:
+    """安全合并模型路由配置，避免无凭据跨 provider 覆盖用户配置。"""
+    routed_cfg = dict(user_cfg) if user_cfg else {}
+    current_provider = str(routed_cfg.get("provider") or "ollama").lower()
+    tier_provider = str(tier_config.get("provider") or current_provider or "ollama").lower()
+    tier_model = tier_config.get("model") or routed_cfg.get("model", "")
+    tier_api_key = tier_config.get("apiKey") or tier_config.get("api_key") or ""
+    tier_base_url = tier_config.get("baseUrl") or tier_config.get("base_url") or ""
+
+    if not tier_model:
+        logger.warning(f"Skipping model route tier={tier}: missing model")
+        return user_cfg
+
+    same_provider = tier_provider == current_provider
+    can_route = tier_provider == "ollama" or same_provider or bool(tier_api_key)
+    if not can_route:
+        logger.warning(
+            "Skipping model route tier=%s for provider=%s: no API key for cross-provider route from %s",
+            tier,
+            tier_provider,
+            current_provider,
+        )
+        return user_cfg
+
+    routed_cfg["provider"] = tier_provider
+    routed_cfg["model"] = tier_model
+    routed_cfg["name"] = f"{PROVIDER_NAMES.get(tier_provider, tier_provider)} · {tier_model}"
+    if tier_api_key:
+        routed_cfg["apiKey"] = tier_api_key
+    elif tier_provider == "ollama":
+        routed_cfg["apiKey"] = ""
+    if tier_base_url:
+        routed_cfg["baseUrl"] = tier_base_url
+    elif not same_provider:
+        routed_cfg["baseUrl"] = BASE_URLS.get(tier_provider, "")
+    return _normalize_llm_config(routed_cfg)
+
+
 @socketio.on("set_model")
 @socketio_auth_required
 def handle_set_model(data):
@@ -1214,27 +1279,19 @@ def handle_set_model(data):
     sid = request.sid
     try:
         # 更新当前 socket 的配置，而不是全局环境变量
-        with _socket_configs_lock:
-            cfg = socket_configs.get(sid)
-            if cfg:
-                cfg["model"] = model_name
-                provider = cfg.get("provider", "ollama")
-                cfg["name"] = f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}"
-            else:
-                # 如果 socket 没有配置，使用当前默认 provider 创建新配置
-                from core.config import get_provider
+        cfg = _get_effective_llm_config(sid)
+        if cfg:
+            cfg["model"] = model_name
+            provider = cfg.get("provider", "ollama")
+            cfg["name"] = f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}"
+        else:
+            # 如果 socket 没有配置，使用当前默认 provider 创建新配置
+            from core.config import get_provider
 
-                provider = get_provider()
-                _web_state.set_socket_config(
-                    sid,
-                    {
-                        "provider": provider,
-                        "model": model_name,
-                        "apiKey": "",
-                        "baseUrl": BASE_URLS.get(provider, ""),
-                        "name": f"{PROVIDER_NAMES.get(provider, provider)} · {model_name}",
-                    },
-                )
+            provider = get_provider()
+            cfg = _normalize_llm_config({"provider": provider, "model": model_name})
+        _web_state.set_socket_config(sid, cfg)
+        set_current_llm_config(cfg, sid)
 
         clear_llm_cache()
         init_agents()
@@ -1259,17 +1316,20 @@ def handle_activate_config(data):
             active = get_active_config()
             if active:
                 sync_to_env(active)
+                normalized = _normalize_llm_config(active)
+                _web_state.set_socket_config(request.sid, normalized)
+                set_current_llm_config(normalized, request.sid)
                 clear_llm_cache()
                 init_agents()
                 emit(
                     "config_activated",
                     {
                         "configId": config_id,
-                        "name": active.get("name", ""),
-                        "provider": active.get("provider", ""),
-                        "provider_name": PROVIDER_NAMES.get(active.get("provider", ""), active.get("provider", "")),
-                        "model": active.get("model", ""),
-                        "message": f"已切换到: {active.get('name', '')}",
+                        "name": normalized.get("name", ""),
+                        "provider": normalized.get("provider", ""),
+                        "provider_name": PROVIDER_NAMES.get(normalized.get("provider", ""), normalized.get("provider", "")),
+                        "model": normalized.get("model", ""),
+                        "message": f"已切换到: {normalized.get('name', '')}",
                     },
                 )
         else:
@@ -1354,14 +1414,12 @@ def handle_set_review_language(data):
 def handle_set_user_config(data):
     """用户设置自己的 LLM 配置（LAN 共享场景，每个用户独立）"""
     sid = request.sid
-    provider = data.get("provider", "ollama")
-    model = data.get("model", "")
-    api_key = data.get("apiKey", "")
-    name = data.get("name", "")
-
-    base_url = BASE_URLS.get(provider, "")
-    if not base_url and provider == "ollama":
-        base_url = "http://localhost:11434/v1"
+    cfg = _normalize_llm_config(data)
+    provider = cfg["provider"]
+    model = cfg["model"]
+    api_key = cfg["apiKey"]
+    base_url = cfg["baseUrl"]
+    name = cfg["name"]
 
     if provider != "ollama" and not api_key:
         emit("config_error", {"message": "请输入 API Key"})
@@ -1370,16 +1428,12 @@ def handle_set_user_config(data):
         emit("config_error", {"message": "请选择模型"})
         return
 
-    _web_state.set_socket_config(
-        sid,
-        {
-            "provider": provider,
-            "model": model,
-            "apiKey": api_key,
-            "baseUrl": base_url,
-            "name": name or f"{PROVIDER_NAMES.get(provider, provider)} · {model}",
-        },
-    )
+    _web_state.set_socket_config(sid, cfg)
+    set_current_llm_config(cfg, sid)
+
+    # 清除 LLM 实例缓存，使下次 get_llm(sid) 使用新配置创建实例
+    logger.info("User config: api_key=...%s, base_url=%s, provider=%s, model=%s", api_key[-4:], base_url, provider, model)
+    clear_llm_cache()
 
     logger.info(f"User config set for sid={sid}, provider={provider}, model={model}")
     emit(

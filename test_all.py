@@ -136,6 +136,32 @@ async def test_model_name():
     assert len(model) > 0
 
 
+@test("配置 - Provider API Key 隔离")
+async def test_provider_api_key_isolation():
+    import os
+
+    import core.config as config
+
+    old_active = config._get_active_config
+    old_specific = os.environ.pop("LLM_API_KEY_SILICONFLOW", None)
+    old_generic = os.environ.pop("LLM_API_KEY", None)
+    config._get_active_config = lambda: {"provider": "deepseek", "apiKey": "deepseek-test-key"}
+    try:
+        assert config.get_api_key("deepseek") == "deepseek-test-key"
+        try:
+            config.get_api_key("siliconflow")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("siliconflow should not reuse deepseek apiKey")
+    finally:
+        config._get_active_config = old_active
+        if old_specific is not None:
+            os.environ["LLM_API_KEY_SILICONFLOW"] = old_specific
+        if old_generic is not None:
+            os.environ["LLM_API_KEY"] = old_generic
+
+
 # ========== 测试 6: 记忆系统 ==========
 @test("记忆系统 - 存储和检索")
 async def test_memory():
@@ -356,6 +382,7 @@ async def main():
         test_cache_stats,
         test_providers,
         test_model_name,
+        test_provider_api_key_isolation,
         test_memory,
         test_rag,
         test_model_router,
