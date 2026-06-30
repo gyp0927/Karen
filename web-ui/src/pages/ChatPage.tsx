@@ -41,10 +41,7 @@ export default function ChatPage() {
         onNew={actions.newSession}
         onSwitch={actions.switchSession}
         onDelete={actions.deleteSession}
-        onManage={() => {
-          // TODO: navigate to a real management page once it exists.
-          // For now, avoid redirecting away from the chat page.
-        }}
+        onManage={() => navigate("/settings")}
         onPickModel={() => setShowModelSwitcher(true)}
       />
       <main className="flex flex-1 flex-col">
